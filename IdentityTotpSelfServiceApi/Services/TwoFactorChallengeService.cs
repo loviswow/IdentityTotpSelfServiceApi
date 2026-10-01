@@ -25,7 +25,7 @@ public sealed class TwoFactorChallengeService(
                 ValidateIssuer = true,
                 ValidIssuer = config["Jwt:Issuer"],
                 ValidateAudience = true,
-                ValidAudience = config["Jwt:Audience"],
+                ValidAudience = JwtTokenService.TwoFactorAudience(config),
                 ValidateLifetime = true,
                 ClockSkew = TimeSpan.FromSeconds(15),
                 ValidateIssuerSigningKey = true,

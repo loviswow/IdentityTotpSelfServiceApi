@@ -1,0 +1,12 @@
+* text=auto
+
+# VB6 소스는 CP949 + CRLF여야 VB6 IDE가 읽는다. 줄바꿈 변환을 하지 않는다.
+*.bas -text diff
+*.frm -text diff
+*.vbp -text diff
+*.frx binary
+
+# Windows 스크립트·솔루션은 CRLF 유지
+*.ps1 text eol=crlf
+*.sln text eol=crlf
+*.sql text eol=crlf

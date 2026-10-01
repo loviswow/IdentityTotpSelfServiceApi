@@ -4,6 +4,8 @@ Option Explicit
 Public gBaseUrl As String
 Public gAccessToken As String
 Public gRefreshToken As String
+' ¸¶Áö¸· API È£ÃâÀÇ HTTP »óÅÂ ÄÚµå(¿¬°á ½ÇÆĞ ½Ã 0). 401/423 µî ½ÇÆĞ »çÀ¯ ¾È³»¿¡ ¾´´Ù.
+Public gLastStatus As Long
 
 Public Sub ApiInit(ByVal baseUrl As String)
     gBaseUrl = baseUrl
@@ -57,10 +59,10 @@ Private Function HttpJson(ByVal method As String, ByVal path As String, ByVal bo
     If Len(bearer) > 0 Then h.SetRequestHeader "Authorization", "Bearer " & bearer
     h.SetTimeouts 5000, 5000, 10000, 10000
     If method = "GET" Then h.Send Else h.Send Utf8Bytes(body)
-    status = h.Status: HttpJson = h.ResponseText
+    status = h.Status: gLastStatus = status: HttpJson = h.ResponseText
     Exit Function
 EH:
-    status = 0: HttpJson = ""
+    status = 0: gLastStatus = 0: HttpJson = ""
 End Function
 
 Private Function Utf8Bytes(ByVal s As String) As Variant
@@ -79,13 +81,18 @@ Private Function JsonEscape(ByVal s As String) As String
     JsonEscape = s
 End Function
 
-' ì™¸ë¶€ JSON ë¼ì´ë¸ŒëŸ¬ë¦¬ ì—†ì´ ìƒ˜í”Œì„ ë‹¨ë… ì‹¤í–‰í•˜ê¸° ìœ„í•œ ë‹¨ìˆœ ì¶”ì¶œê¸°.
-' ìš´ì˜ì—ì„œëŠ” VB-JSON ë“± ê²€ì¦ëœ parser ì‚¬ìš© ê¶Œì¥.
+' ¿ÜºÎ JSON ¶óÀÌºê·¯¸® ¾øÀÌ »ùÇÃÀ» ´Üµ¶ ½ÇÇàÇÏ±â À§ÇÑ ´Ü¼ø ÃßÃâ±â.
+' ¿î¿µ¿¡¼­´Â VB-JSON µî °ËÁõµÈ parser »ç¿ë ±ÇÀå.
 Private Function JsonString(ByVal json As String, ByVal key As String) As String
     Dim p As Long, q As Long, r As Long, marker As String
     marker = Chr$(34) & key & Chr$(34): p = InStr(1, json, marker, vbTextCompare): If p = 0 Then Exit Function
     p = InStr(p + Len(marker), json, ":"): If p = 0 Then Exit Function
-    q = InStr(p + 1, json, Chr$(34)): If q = 0 Then Exit Function
+    ' °ªÀÌ ¹®ÀÚ¿­ÀÌ ¾Æ´Ï¸é(null µî) ºó ¹®ÀÚ¿­. ´ÙÀ½ ¼Ó¼ºÀÇ ¹®ÀÚ¿­À» Àß¸ø ÀĞÁö ¾Êµµ·Ï Äİ·Ğ ¹Ù·Î µÚ¸¦ È®ÀÎÇÑ´Ù.
+    q = p + 1
+    Do While Mid$(json, q, 1) = " "
+        q = q + 1
+    Loop
+    If Mid$(json, q, 1) <> Chr$(34) Then Exit Function
     r = q + 1
     Do
         r = InStr(r, json, Chr$(34)): If r = 0 Then Exit Function
@@ -96,5 +103,8 @@ Private Function JsonString(ByVal json As String, ByVal key As String) As String
 End Function
 Private Function JsonBool(ByVal json As String, ByVal key As String) As Boolean
     Dim p As Long, marker As String: marker = Chr$(34) & key & Chr$(34): p = InStr(1, json, marker, vbTextCompare)
-    If p > 0 Then p = InStr(p + Len(marker), json, ":"): If p > 0 Then JsonBool = (LCase$(Trim$(Mid$(json, p + 1, 5))) = "true")
+    If p = 0 Then Exit Function
+    p = InStr(p + Len(marker), json, ":"): If p = 0 Then Exit Function
+    ' "true," Ã³·³ µÚ¿¡ ½°Ç¥/°ıÈ£°¡ ºÙÀ¸¹Ç·Î ¾Õ 4±ÛÀÚ¸¸ ºñ±³ÇÑ´Ù.
+    JsonBool = (LCase$(Left$(LTrim$(Mid$(json, p + 1)), 4)) = "true")
 End Function

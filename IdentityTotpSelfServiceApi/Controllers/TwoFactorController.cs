@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Text.Encodings.Web;
 using IdentityTotpSelfServiceApi.Dtos;
 using IdentityTotpSelfServiceApi.Models;
+using IdentityTotpSelfServiceApi.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -13,8 +14,11 @@ namespace IdentityTotpSelfServiceApi.Controllers;
 [Route("api/account/2fa")]
 public class TwoFactorController(
     UserManager<ApplicationUser> userManager,
+    IUserStore<ApplicationUser> userStore,
     UrlEncoder urlEncoder,
-    IConfiguration config) : ControllerBase
+    IConfiguration config,
+    RefreshTokenService refreshTokenService,
+    AuditService audit) : ControllerBase
 {
     [HttpGet("status")]
     public async Task<ActionResult<TwoFactorStatusResponse>> Status()
@@ -39,8 +43,13 @@ public class TwoFactorController(
         var key = await userManager.GetAuthenticatorKeyAsync(user);
         if (string.IsNullOrWhiteSpace(key))
         {
-            var reset = await userManager.ResetAuthenticatorKeyAsync(user);
-            if (!reset.Succeeded) return IdentityError(reset);
+            // ResetAuthenticatorKeyAsync는 SecurityStamp까지 바꿔 지금 쓰는 Access Token을 무효화하므로
+            // 바로 이어지는 /enable 호출이 401이 된다. 아직 2FA가 꺼진 상태라 세션을 끊을 이유가 없으므로
+            // 키 저장소에 직접 키만 저장한다. 세션 무효화는 /enable에서 일어난다.
+            var store = (IUserAuthenticatorKeyStore<ApplicationUser>)userStore;
+            await store.SetAuthenticatorKeyAsync(user, userManager.GenerateNewAuthenticatorKey(), HttpContext.RequestAborted);
+            var saved = await userManager.UpdateAsync(user);
+            if (!saved.Succeeded) return IdentityError(saved);
             key = await userManager.GetAuthenticatorKeyAsync(user);
         }
 
@@ -53,6 +62,8 @@ public class TwoFactorController(
 
         // QR 이미지는 Identity 내장 기능이 아니다.
         // 클라이언트는 AuthenticatorUri를 QR로 렌더링하거나 SharedKey를 수동 입력한다.
+        // SharedKey는 TOTP Secret이므로 감사 로그에 남기지 않는다.
+        await audit.WriteAsync("2fa.setup", true, user.Id);
         return Ok(new TwoFactorSetupResponse(key, uri, false));
     }
 
@@ -73,13 +84,20 @@ public class TwoFactorController(
             user, TokenOptions.DefaultAuthenticatorProvider, NormalizeCode(request.Code));
 
         if (!valid)
+        {
+            await audit.WriteAsync("2fa.enable.failed", false, user.Id, "code");
             return BadRequest(new { message = "Invalid authenticator code." });
+        }
 
         var enabled = await userManager.SetTwoFactorEnabledAsync(user, true);
         if (!enabled.Succeeded) return IdentityError(enabled);
 
         var codes = await userManager.GenerateNewTwoFactorRecoveryCodesAsync(user, 10);
         await userManager.UpdateSecurityStampAsync(user);
+        // 비밀번호만으로 발급된 세션이 Refresh로 amr=mfa Access JWT를 얻지 못하도록 폐기한다(REG-007).
+        // 클라이언트는 다시 로그인해 TOTP 2차 인증을 거쳐야 한다.
+        await refreshTokenService.RevokeAllAsync(user.Id, Ip(), "2fa-enable");
+        await audit.WriteAsync("2fa.enable", true, user.Id);
 
         return Ok(new
         {
@@ -98,11 +116,18 @@ public class TwoFactorController(
             return BadRequest(new { message = "2FA is not enabled." });
 
         if (!await userManager.CheckPasswordAsync(user, request.Password))
+        {
+            await audit.WriteAsync("2fa.disable.failed", false, user.Id, "password");
             return Unauthorized();
+        }
 
         var valid = await userManager.VerifyTwoFactorTokenAsync(
             user, TokenOptions.DefaultAuthenticatorProvider, NormalizeCode(request.Code));
-        if (!valid) return Unauthorized(new { message = "Invalid authenticator code." });
+        if (!valid)
+        {
+            await audit.WriteAsync("2fa.disable.failed", false, user.Id, "code");
+            return Unauthorized(new { message = "Invalid authenticator code." });
+        }
 
         var disabled = await userManager.SetTwoFactorEnabledAsync(user, false);
         if (!disabled.Succeeded) return IdentityError(disabled);
@@ -111,6 +136,9 @@ public class TwoFactorController(
         if (!reset.Succeeded) return IdentityError(reset);
 
         await userManager.UpdateSecurityStampAsync(user);
+        // SecurityStamp만 바꾸면 기존 Refresh Token으로 Access JWT를 다시 받을 수 있으므로 함께 폐기한다(REG-005).
+        await refreshTokenService.RevokeAllAsync(user.Id, Ip(), "2fa-disable");
+        await audit.WriteAsync("2fa.disable", true, user.Id);
         return NoContent();
     }
 
@@ -124,9 +152,14 @@ public class TwoFactorController(
 
         var valid = await userManager.VerifyTwoFactorTokenAsync(
             user, TokenOptions.DefaultAuthenticatorProvider, NormalizeCode(request.Code));
-        if (!valid) return Unauthorized(new { message = "Invalid authenticator code." });
+        if (!valid)
+        {
+            await audit.WriteAsync("2fa.recovery-codes.regenerate.failed", false, user.Id, "code");
+            return Unauthorized(new { message = "Invalid authenticator code." });
+        }
 
         var codes = await userManager.GenerateNewTwoFactorRecoveryCodesAsync(user, 10);
+        await audit.WriteAsync("2fa.recovery-codes.regenerate", true, user.Id);
         return Ok(new { recoveryCodes = codes?.ToArray() ?? [] });
     }
 
@@ -139,13 +172,20 @@ public class TwoFactorController(
         if (user is null) return Unauthorized();
 
         if (!await userManager.CheckPasswordAsync(user, request.Password))
+        {
+            await audit.WriteAsync("2fa.reset.failed", false, user.Id, "password");
             return Unauthorized();
+        }
 
         if (user.TwoFactorEnabled)
         {
             var valid = await userManager.VerifyTwoFactorTokenAsync(
                 user, TokenOptions.DefaultAuthenticatorProvider, NormalizeCode(request.Code));
-            if (!valid) return Unauthorized(new { message = "Invalid authenticator code." });
+            if (!valid)
+            {
+                await audit.WriteAsync("2fa.reset.failed", false, user.Id, "code");
+                return Unauthorized(new { message = "Invalid authenticator code." });
+            }
         }
 
         var disable = await userManager.SetTwoFactorEnabledAsync(user, false);
@@ -155,8 +195,12 @@ public class TwoFactorController(
         if (!reset.Succeeded) return IdentityError(reset);
 
         await userManager.UpdateSecurityStampAsync(user);
+        await refreshTokenService.RevokeAllAsync(user.Id, Ip(), "2fa-reset");
+        await audit.WriteAsync("2fa.reset", true, user.Id);
         return Ok(new { message = "Authenticator reset. Run setup and enable again." });
     }
+
+    private string? Ip() => HttpContext.Connection.RemoteIpAddress?.ToString();
 
     private async Task<ApplicationUser?> CurrentUser()
     {
@@ -170,7 +214,7 @@ public class TwoFactorController(
                $"?secret={key}&issuer={urlEncoder.Encode(issuer)}&digits=6";
     }
 
-    private IActionResult IdentityError(IdentityResult result)
+    private BadRequestObjectResult IdentityError(IdentityResult result)
         => BadRequest(new { errors = result.Errors.Select(x => new { x.Code, x.Description }) });
 
     private static string NormalizeCode(string code)

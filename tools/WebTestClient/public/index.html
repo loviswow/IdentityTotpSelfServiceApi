@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Identity TOTP API 테스트</title>
+<style>
+  :root { --bg:#f6f7f9; --panel:#fff; --text:#1d2330; --muted:#667085; --line:#d9dee7; --accent:#2f5bd3; --ok:#1a7f37; --fail:#c62828; --code:#f0f2f5; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14171c; --panel:#1c2027; --text:#e6e9ef; --muted:#98a2b3; --line:#2e3440; --accent:#7aa2ff; --ok:#4cc26a; --fail:#ff6b6b; --code:#252a33; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 system-ui, "Malgun Gothic", sans-serif; }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); background:var(--panel); display:flex; gap:16px; align-items:baseline; flex-wrap:wrap; }
+  header h1 { font-size:17px; margin:0; }
+  header span { color:var(--muted); font-size:12px; }
+  main { display:grid; grid-template-columns:minmax(320px, 430px) 1fr; gap:16px; padding:16px 20px; }
+  @media (max-width: 900px) { main { grid-template-columns:1fr; } }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:14px; }
+  h2 { font-size:13px; margin:0 0 10px; color:var(--muted); font-weight:600; letter-spacing:.02em; }
+  label { display:grid; grid-template-columns:110px 1fr; align-items:center; gap:8px; margin:6px 0; font-size:13px; }
+  input { width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); font:inherit; }
+  .btns { display:flex; flex-wrap:wrap; gap:6px; }
+  button { padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); cursor:pointer; font:inherit; font-size:13px; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .state { font-family:Consolas, monospace; font-size:12px; display:grid; grid-template-columns:120px 1fr; gap:2px 8px; word-break:break-all; }
+  .state b { color:var(--muted); font-weight:500; }
+  #totp { font-size:20px; letter-spacing:.15em; }
+  #log { font-family:Consolas, "D2Coding", monospace; font-size:12px; white-space:pre-wrap; word-break:break-all; background:var(--code); border-radius:6px; padding:10px; height:calc(100vh - 170px); min-height:300px; overflow:auto; margin:0; }
+  .pass { color:var(--ok); } .fail { color:var(--fail); } .req { color:var(--accent); }
+  #summary { font-weight:600; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Identity TOTP Self-Service API 테스트</h1>
+  <span id="cfg">API 확인 중…</span>
+</header>
+<main>
+  <div>
+    <section>
+      <h2>계정</h2>
+      <label>이메일 <input id="email"></label>
+      <label>비밀번호 <input id="pw" value="Strong!Pass123"></label>
+      <label>새 비밀번호 <input id="npw" value="Changed!Pass456"></label>
+      <label>TOTP/복구 코드 <input id="code" placeholder="비우면 Setup 키로 자동 계산"></label>
+    </section>
+    <section>
+      <h2>인증</h2>
+      <div class="btns">
+        <button data-act="register">회원가입</button>
+        <button data-act="confirm">메일로 이메일 확인</button>
+        <button data-act="resend">확인 메일 재발송</button>
+        <button data-act="login">로그인</button>
+        <button data-act="twoFactor">TOTP 인증</button>
+        <button data-act="recovery">복구 코드 로그인</button>
+        <button data-act="refresh">Refresh</button>
+        <button data-act="logout">로그아웃</button>
+      </div>
+    </section>
+    <section>
+      <h2>Self-Service (Access Token 필요)</h2>
+      <div class="btns">
+        <button data-act="me">내 정보</button>
+        <button data-act="status">2FA 상태</button>
+        <button data-act="setup">2FA Setup</button>
+        <button data-act="enable">2FA Enable</button>
+        <button data-act="disable">2FA Disable</button>
+        <button data-act="reset">2FA Reset</button>
+        <button data-act="regen">복구 코드 재발급</button>
+        <button data-act="changePw">비밀번호 변경</button>
+      </div>
+    </section>
+    <section>
+      <h2>비밀번호 분실 / 관리자</h2>
+      <div class="btns">
+        <button data-act="forgot">비밀번호 찾기</button>
+        <button data-act="resetPw">메일로 비밀번호 재설정</button>
+      </div>
+      <label>대상 UserId <input id="target" placeholder="내 정보 조회 시 자동 입력"></label>
+      <label>사유 <input id="reason" value="기기 분실"></label>
+      <div class="btns"><button data-act="adminReset">관리자 2FA 초기화 (현재 토큰)</button></div>
+    </section>
+    <section>
+      <h2>현재 상태</h2>
+      <div class="state">
+        <b>Access</b><span id="sAccess">-</span>
+        <b>Refresh</b><span id="sRefresh">-</span>
+        <b>Challenge</b><span id="sChallenge">-</span>
+        <b>Shared key</b><span id="sKey">-</span>
+        <b>현재 TOTP</b><span><span id="totp">------</span> <span id="ttl"></span></span>
+      </div>
+    </section>
+    <section>
+      <h2>전체 시나리오</h2>
+      <label>관리자 이메일 <input id="adminEmail" placeholder="비우면 관리자 단계 건너뜀"></label>
+      <label>관리자 비밀번호 <input id="adminPw" value="Admin!Pass123"></label>
+      <div class="btns">
+        <button class="primary" data-act="scenario">전체 시나리오 실행</button>
+        <button data-act="clear">로그 지우기</button>
+      </div>
+    </section>
+  </div>
+  <div>
+    <section>
+      <h2>로그 <span id="summary"></span></h2>
+      <pre id="log"></pre>
+    </section>
+  </div>
+</main>
+<script type="module">
+import { createApi, totp, runScenario } from './scenario.js';
+
+const api = createApi('');
+const $ = (id) => document.getElementById(id);
+const st = { access: '', refresh: '', challenge: '', key: '' };
+const mask = (t) => (t ? t.slice(0, 8) + '…' : '-');
+const logEl = $('log');
+
+function log(text, cls) {
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  else if (text.startsWith('PASS')) line.className = 'pass';
+  else if (text.startsWith('FAIL')) line.className = 'fail';
+  line.textContent = text;
+  logEl.append(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+// 화면 로그에도 토큰 원문은 앞 8자만 보인다.
+const maskJson = (s) => s.replace(/("(?:accessToken|refreshToken|challengeToken)":")([^"]{8})[^"]*/g, '$1$2…');
+
+function render() {
+  $('sAccess').textContent = mask(st.access);
+  $('sRefresh').textContent = mask(st.refresh);
+  $('sChallenge').textContent = mask(st.challenge);
+  $('sKey').textContent = st.key || '-';
+}
+function keep(json) {
+  if (!json) return;
+  if (json.accessToken) st.access = json.accessToken;
+  if (json.refreshToken) st.refresh = json.refreshToken;
+  if (json.challengeToken) st.challenge = json.challengeToken;
+  if (json.sharedKey) st.key = json.sharedKey;
+  if (json.id) $('target').value = json.id;
+  render();
+}
+async function code() { return $('code').value.trim() || (st.key ? await totp(st.key) : ''); }
+async function lastMail(subject) {
+  const m = (await api.mails($('email').value.trim())).filter((x) => x.subject === subject).pop();
+  if (!m) throw new Error(`'${subject}' 메일이 없습니다. API를 Development + Email:PickupDirectory로 실행했는지 확인하십시오.`);
+  return m.body;
+}
+
+const actions = {
+  register: () => api.register($('email').value.trim(), $('pw').value),
+  confirm: async () => { const b = await lastMail('Confirm email'); const r = /Confirmation token: ([^;\s]+); userId: (\S+)/.exec(b); return api.confirmEmail(r[2], r[1]); },
+  resend: () => api.resendConfirmation($('email').value.trim()),
+  login: () => api.login($('email').value.trim(), $('pw').value),
+  twoFactor: async () => api.twoFactor(st.challenge, await code()),
+  recovery: () => api.recovery(st.challenge, $('code').value.trim()),
+  refresh: () => api.refresh(st.refresh),
+  logout: async () => { const r = await api.revoke(st.refresh); if (r.status === 204) { st.access = st.refresh = ''; render(); } return r; },
+  me: () => api.me(st.access),
+  status: () => api.status2fa(st.access),
+  setup: () => api.setup2fa(st.access),
+  enable: async () => { const r = await api.enable2fa(st.access, await code()); if (r.status === 200) log('2FA가 활성화되어 기존 토큰이 폐기되었습니다. 복구 코드를 보관한 뒤 다시 로그인 → TOTP 인증 하십시오.', 'req'); return r; },
+  disable: async () => api.disable2fa(st.access, $('pw').value, await code()),
+  reset: async () => api.reset2fa(st.access, $('pw').value, await code()),
+  regen: async () => api.regenerateCodes(st.access, await code()),
+  changePw: async () => { const r = await api.changePassword(st.access, $('pw').value, $('npw').value); if (r.status === 204) $('pw').value = $('npw').value; return r; },
+  forgot: () => api.forgotPassword($('email').value.trim()),
+  resetPw: async () => { const t = /Reset token: (\S+)/.exec(await lastMail('Password reset'))[1]; const r = await api.resetPassword($('email').value.trim(), t, $('npw').value); if (r.status === 204) $('pw').value = $('npw').value; return r; },
+  adminReset: () => api.adminReset2fa(st.access, $('target').value.trim(), $('reason').value),
+};
+
+async function runAll() {
+  $('summary').textContent = '실행 중…';
+  const r = await runScenario({ base: '', adminEmail: $('adminEmail').value.trim(), adminPassword: $('adminPw').value, log });
+  const pass = r.results.filter((x) => x.ok).length;
+  $('summary').textContent = `${pass}/${r.results.length} 통과`;
+  $('summary').className = r.failed.length ? 'fail' : 'pass';
+  document.title = `${r.failed.length ? 'FAIL' : 'PASS'} ${pass}/${r.results.length}`; // 자동 검증용
+  return r;
+}
+
+document.addEventListener('click', async (e) => {
+  const act = e.target.closest('button')?.dataset.act;
+  if (!act) return;
+  if (act === 'clear') { logEl.textContent = ''; $('summary').textContent = ''; return; }
+  if (act === 'scenario') { await runAll(); return; }
+  const name = e.target.textContent;
+  try {
+    const r = await actions[act]();
+    keep(r.json);
+    log(`[${name}] ${r.status} ${maskJson(r.text || '')}`, r.status >= 400 ? 'fail' : undefined);
+  } catch (err) { log(`[${name}] 오류: ${err.message}`, 'fail'); }
+});
+
+setInterval(async () => {
+  const left = 30 - (Math.floor(Date.now() / 1000) % 30);
+  $('totp').textContent = st.key ? await totp(st.key) : '------';
+  $('ttl').textContent = st.key ? `(${left}초)` : '';
+}, 1000);
+
+$('email').value = `ui-${Math.random().toString(16).slice(2, 8)}@e2e.local`;
+fetch('/dev/config').then((r) => r.json()).then((c) => { $('cfg').textContent = `API ${c.apiUrl} · 테스트 메일 ${c.mail ? '사용' : '없음 (확인/재설정 메일 버튼 사용 불가)'}`; }).catch(() => {});
+const q = new URLSearchParams(location.search);
+if (q.get('admin')) { const [a, ...p] = q.get('admin').split(':'); $('adminEmail').value = a; $('adminPw').value = p.join(':'); }
+if (q.has('autorun')) runAll();
+render();
+</script>
+</body>
+</html>

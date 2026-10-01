@@ -10,10 +10,10 @@ public sealed class TokenController(RefreshTokenService refresh,JwtTokenService 
 {
  [HttpPost("refresh")]
  public async Task<IActionResult> Refresh(RefreshRequest req){ var r=await refresh.RotateAsync(req.RefreshToken,Ip(),id=>users.FindByIdAsync(id));
-   if(r.User is null){await audit.WriteAsync(r.ReuseDetected?"refresh.reuse":"refresh.failed",false);return Unauthorized();}
+   if(r.User is null){var type=r.Failure switch{"reuse"=>"refresh.reuse","revoked"=>"refresh.revoked",_=>"refresh.failed"};await audit.WriteAsync(type,false,r.OwnerId,r.Failure is "revoked" or "reuse"?r.FailureDetail:r.Failure);return Unauthorized();}
    var access=await jwt.CreateAccessTokenAsync(r.User); await audit.WriteAsync("refresh.success",true,r.User.Id);
    return Ok(new TokenPairResponse(access.Token,access.ExpiresAt,r.Raw!,r.NewToken!.ExpiresAt)); }
  [HttpPost("revoke")]
- public async Task<IActionResult> Revoke(RevokeRequest req){await refresh.RevokeAsync(req.RefreshToken,Ip(),"user-revoke");return NoContent();}
+ public async Task<IActionResult> Revoke(RevokeRequest req){var userId=await refresh.RevokeAsync(req.RefreshToken,Ip(),"user-revoke");await audit.WriteAsync(userId is null?"logout.failed":"logout",userId is not null,userId);return NoContent();}
  private string? Ip()=>HttpContext.Connection.RemoteIpAddress?.ToString();
 }

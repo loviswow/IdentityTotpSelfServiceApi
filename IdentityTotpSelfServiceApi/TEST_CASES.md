@@ -12,6 +12,18 @@
 |2FA-04|로그인|정상 TOTP|Access+Refresh|O|
 |2FA-05|복구|복구코드 첫 사용|200|O|
 |2FA-06|복구|동일 복구코드 재사용|401|O|
+|2FA-07|2차 인증|잘못된 TOTP 5회 후 정상 TOTP|423 Lock (REG-006)|O|
+|2FA-08|복구|잘못된 복구코드 5회 후 정상 복구코드|423 Lock (REG-006)|O|
+|2FA-09|disable/reset|2FA 해제·초기화 후 기존 Refresh|401 (REG-005)|O|
+|2FA-10|enable|2FA 활성화 전 발급된 Refresh|401 (REG-007)|O|
+|2FA-11|challenge|challengeToken을 Bearer로 /me·/2fa/status·재발급 호출|401 (REG-008)|O|
+|2FA-12|setup→enable|setup 직후 같은 Access Token으로 enable|200 (REG-009)|O|
+|AUD-04|감사 로그|로그아웃·비밀번호 변경으로 폐기된 토큰으로 Refresh|`refresh.revoked`(사유), `refresh.reuse` 아님 (REG-010)|O|
+|VB6-01|VB6 샘플 모듈|2FA 사용자 ApiLogin → ApiTotp → ApiGet → ApiRefresh → ApiLogout, 실패 경로|11/11 (REG-011)|E2E|
+|E2E-01|Web/VB6|`scripts/run-e2e.ps1` 전체 시나리오(가입~잠금)|Web 44/44, VB6 95/95|E2E|
+|AUD-01|감사 로그|로그인·2FA·복구 코드·로그아웃·2FA 해제|이벤트 기록 + Detail에 토큰/Secret/복구 코드 없음|O|
+|AUD-02|감사 로그|복구 코드 재발급·2FA 초기화|이벤트 기록|O|
+|AUD-03|감사 로그|TOTP 5회 실패 후 시도|account.locked 1회 + 2fa.locked/login.locked|O|
 |TOK-01|Refresh|정상 토큰|새 Access+Refresh|O|
 |TOK-02|Refresh|회전 전 토큰 재사용|401 + family revoke|O|
 |TOK-03|Refresh|family revoke 후 최신 토큰|401|O|

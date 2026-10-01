@@ -31,8 +31,13 @@ jobs:
           echo '/opt/mssql-tools18/bin' >> $GITHUB_PATH
       - name: Create database
         run: sqlcmd -S localhost,1433 -U sa -P 'Ci_Test!Password2026' -C -Q "IF DB_ID('IdentityTotpCi') IS NULL CREATE DATABASE IdentityTotpCi"
-      - name: Apply fixed migration
-        run: sqlcmd -S localhost,1433 -U sa -P 'Ci_Test!Password2026' -C -d IdentityTotpCi -b -i IdentityTotpSelfServiceApi/MigrationsSql/001_IdentityTotp_v4.sql
+      - name: Apply fixed migrations
+        run: |
+          for f in IdentityTotpSelfServiceApi/MigrationsSql/[0-9][0-9][0-9]_*.sql; do
+            case "$f" in *_rollback.sql) continue;; esac
+            echo "Applying $f"
+            sqlcmd -S localhost,1433 -U sa -P 'Ci_Test!Password2026' -C -d IdentityTotpCi -b -i "$f"
+          done
       - name: Restore
         run: dotnet restore IdentityTotpSelfServiceApi.sln
       - name: Build
