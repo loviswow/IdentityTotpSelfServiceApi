@@ -1066,7 +1066,7 @@ TOTP는 시간 기반 인증 방식이므로 서버 시간이 정확해야 한�
 
 # 32. 현재 검증 상태
 
-2026-10-01 로컬 개발 PC에서 실제로 실행해 확인했다.
+2026-10-01 로컬 개발 PC에서 실제로 실행해 확인했다. CI는 GitHub Actions에서 확인했다.
 
 검증 환경: Windows 10, .NET SDK 10.0.401, SQL Server 2022 Express(`localhost\SQLEXPRESS`, DB `IdentityTotp_Test`), Node 22, Chrome, Visual Basic 6.0
 
@@ -1082,13 +1082,13 @@ TOTP는 시간 기반 인증 방식이므로 서버 시간이 정확해야 한�
 | VB6 샘플 모듈 (`VB6Sample/modIdentityApi.bas`, `tools/Vb6SampleCheck`) | 11/11 통과 |
 | VB6/JS TOTP 계산 | RFC 6238 테스트 벡터 6개 일치 |
 | 감사 로그 | 전체 이벤트 기록, `Detail`에 토큰 원문 없음 |
+| GitHub Actions CI (`ci.yml`, ubuntu-latest + SQL Server 2022 컨테이너) | 성공. Migration 적용, Release 빌드, SQL Server 테스트, TRX Artifact 업로드 전 단계 통과 ([run #1](https://github.com/loviswow/IdentityTotpSelfServiceApi/actions/runs/36848395947), `3420c69`) |
 
 E2E 재실행 방법은 `scripts/run-e2e.ps1`, 테스트 클라이언트 사용법은 `tools/README.md`를 참고한다.
 
 아직 확인되지 않은 항목:
 
 ```text
-GitHub Actions CI 실제 실행 (저장소 미구성)
 Authenticator 실제 기기(휴대폰 앱) 테스트
 메일 실제 발송 (SMTP 구현체 미구현, 개발용 PickupDirectory만 검증)
 실제 VB6 업무 프로그램 연동 (테스트 클라이언트로만 검증)
