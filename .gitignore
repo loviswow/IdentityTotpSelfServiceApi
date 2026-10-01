@@ -8,6 +8,7 @@ tools/Vb6TestClient/build.log
 tools/Vb6TestClient/*.vbw
 tools/Vb6SampleCheck/*.exe
 tools/Vb6SampleCheck/build.log
+tools/Vb6SampleCheck/*.vbw
 IdentityTotpSelfServiceApi/VB6Sample/*.exe
 IdentityTotpSelfServiceApi/VB6Sample/build.log
 IdentityTotpSelfServiceApi/VB6Sample/*.vbw
