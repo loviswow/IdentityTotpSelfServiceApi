@@ -1,0 +1,20 @@
+Private Sub cmdLogin_Click()
+    Dim need2FA As Boolean, challenge As String
+    ApiInit "https://localhost:5001"
+    If Not ApiLogin(txtEmail.Text, txtPassword.Text, need2FA, challenge) Then
+        MsgBox "로그인 실패", vbExclamation: Exit Sub
+    End If
+    If need2FA Then
+        Dim code As String: code = InputBox("Authenticator 6자리 코드를 입력하세요.")
+        If Not ApiTotp(challenge, code) Then MsgBox "2FA 인증 실패", vbExclamation: Exit Sub
+    End If
+    MsgBox "로그인 성공"
+End Sub
+
+Private Sub cmdRefresh_Click()
+    If ApiRefresh() Then MsgBox "토큰 갱신 성공" Else MsgBox "토큰 갱신 실패"
+End Sub
+
+Private Sub cmdLogout_Click()
+    If ApiLogout() Then MsgBox "로그아웃 완료" Else MsgBox "로그아웃 실패"
+End Sub

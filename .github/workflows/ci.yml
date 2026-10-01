@@ -1,0 +1,47 @@
+name: identity-api-ci
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_SA_PASSWORD: "Ci_Test!Password2026"
+        ports: [1433:1433]
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Ci_Test!Password2026' -C -Q 'SELECT 1' || exit 1"
+          --health-interval 10s --health-timeout 5s --health-retries 15
+    env:
+      TEST_SQLSERVER_CONNECTION: "Server=localhost,1433;Database=IdentityTotpCi;User Id=sa;Password=Ci_Test!Password2026;TrustServerCertificate=True;MultipleActiveResultSets=true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install sqlcmd
+        run: |
+          curl https://packages.microsoft.com/keys/microsoft.asc | sudo tee /etc/apt/trusted.gpg.d/microsoft.asc
+          curl https://packages.microsoft.com/config/ubuntu/24.04/prod.list | sudo tee /etc/apt/sources.list.d/mssql-release.list
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y mssql-tools18
+          echo '/opt/mssql-tools18/bin' >> $GITHUB_PATH
+      - name: Create database
+        run: sqlcmd -S localhost,1433 -U sa -P 'Ci_Test!Password2026' -C -Q "IF DB_ID('IdentityTotpCi') IS NULL CREATE DATABASE IdentityTotpCi"
+      - name: Apply fixed migration
+        run: sqlcmd -S localhost,1433 -U sa -P 'Ci_Test!Password2026' -C -d IdentityTotpCi -b -i IdentityTotpSelfServiceApi/MigrationsSql/001_IdentityTotp_v4.sql
+      - name: Restore
+        run: dotnet restore IdentityTotpSelfServiceApi.sln
+      - name: Build
+        run: dotnet build IdentityTotpSelfServiceApi.sln -c Release --no-restore
+      - name: Test all regressions
+        run: dotnet test IdentityTotpSelfServiceApi.sln -c Release --no-build --logger "trx;LogFileName=regression.trx" --results-directory TestResults
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults/**
