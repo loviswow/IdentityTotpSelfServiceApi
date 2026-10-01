@@ -6,6 +6,9 @@
 *.vbp -text diff
 *.frx binary
 
+# CP949 텍스트(개발 이력). 원본 바이트 그대로 보존한다.
+IdentityTotpSelfServiceApi_Handover2.TXT -text diff
+
 # Windows 스크립트·솔루션은 CRLF 유지
 *.ps1 text eol=crlf
 *.sln text eol=crlf

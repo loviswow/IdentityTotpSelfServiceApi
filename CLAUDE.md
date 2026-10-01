@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 저장소 루트(`D:\work\totp\IdentityTotpSelfServiceApi_v4`)가 솔루션 루트이며, 모든 명령은 여기서 실행한다. 첫 커밋은 인수받은 원본 v4(`..\IdentityTotpSelfServiceApi_v4.zip`)이므로 `git diff <첫 커밋>`으로 인수 이후 변경을 볼 수 있다.
 
 - `IdentityTotpSelfServiceApi_Handover.md`: 이관 및 설계 문서. 요구사항, 회귀 결함 이력(REG-001~011, 최초 빌드 결함 표), 검증 상태(32장), 인수 기준(37장)의 기준 문서다.
+- `IdentityTotpSelfServiceApi_Handover2.TXT`: v2→v3→v4 개발 대화 이력(각 버전에서 추가한 기능과 수정한 결함). **CP949** 텍스트다.
 - `IdentityTotpSelfServiceApi/`: ASP.NET Core (net10.0) Web API
 - `IdentityTotpSelfServiceApi.Tests/`: xUnit v3 통합 테스트 (`WebApplicationFactory<Program>`)
 - `tools/WebTestClient/`, `tools/Vb6TestClient/`, `tools/Vb6SampleCheck/`: 실제 서버에 대한 E2E 테스트 클라이언트 (`tools/README.md`)
