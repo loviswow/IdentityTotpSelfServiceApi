@@ -1187,6 +1187,8 @@ TOTP는 시간 기반 인증 방식이므로 서버 시간이 정확해야 한�
 | E2E VB6 (`Vb6TestClient.exe`) | 141/141 통과 (등록 QR BMP 다운로드·LoadPicture 포함) |
 | VB6 샘플 모듈 (`tools/Vb6SampleCheck`) | 12/12 통과 (deviceName → 세션 목록 표시 포함) |
 | 감사 로그 | 새 이벤트(`session.*`, `admin.*`) 기록, `Detail`에 토큰 원문 없음 |
+| GitHub Actions CI (관리자 보안·세션·SMTP, `6e74533`) | 성공. Migration `003` 포함 적용, Release 빌드, SQL Server 테스트 ([run](https://github.com/loviswow/IdentityTotpSelfServiceApi/actions/runs/36952325013)) |
+| GitHub Actions CI (등록 QR·REG-014·VB6 보완, `a875a14`) | 성공 ([run](https://github.com/loviswow/IdentityTotpSelfServiceApi/actions/runs/36956626817)) |
 
 E2E 재실행 방법은 `scripts/run-e2e.ps1`, 테스트 클라이언트 사용법은 `tools/README.md`를 참고한다.
 
