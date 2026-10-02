@@ -247,8 +247,12 @@ dotnet test IdentityTotpSelfServiceApi.sln --filter "FullyQualifiedName~AuthFlow
 ## VB6 클라이언트
 
 `VB6Sample/IdentityApiSample.vbp`는 VB6 IDE에서 바로 열 수 있는 로그인 샘플 프로젝트입니다. WinHttp로 로그인 → TOTP → 내 정보 → Refresh → 로그아웃을 호출합니다.
-- `modIdentityApi.bas`: 업무 프로그램에 그대로 가져다 쓰는 API 모듈입니다. `ApiInit`, `ApiLogin`, `ApiTotp`, `ApiGet`, `ApiRefresh`, `ApiLogout`, `gLastStatus`를 제공합니다. `ApiLogin`과 `ApiTotp`의 마지막 인자 `deviceName`(선택)을 주면 로그인 기기 목록에 그 이름이 표시됩니다(예: `"영업관리 " & Environ$("COMPUTERNAME")`).
-- `frmLogin.frm`: 사용 예입니다. 401이 나면 Refresh를 한 번만 시도하고, 실패하면 다시 로그인하도록 안내합니다. 423(잠금)은 따로 안내합니다.
+- `modIdentityApi.bas`: 업무 프로그램에 그대로 가져다 쓰는 API 모듈입니다. `ApiInit`, `ApiLogin`, `ApiTotp`, `ApiRecovery`, `ApiGet`, `ApiRefresh`, `ApiLogout`, `gLastStatus`, `gLastMessage`(응답의 `message`)를 제공합니다. `ApiLogin`과 `ApiTotp`의 마지막 인자 `deviceName`(선택)을 주면 로그인 기기 목록에 그 이름이 표시됩니다(예: `"영업관리 " & Environ$("COMPUTERNAME")`).
+- `frmLogin.frm`: 2단계 로그인 화면 예제입니다.
+  - **1단계**: API 주소·이메일·비밀번호 → [다음]. 성공하면 비밀번호 칸을 비웁니다. 401·423·429·연결 실패를 구분해 안내합니다.
+  - **2단계(Google OTP)**: 6자리 숫자만 입력받고, 6자리가 되면 자동으로 인증합니다. challenge 유효 시간(5분)을 남은 시간으로 보여 줍니다. 코드가 틀리면(`gLastMessage`에 `Invalid…`) 다시 입력받고, challenge가 만료되었거나 계정이 잠기면 1단계로 돌아갑니다. [복구 코드 사용]으로 복구 코드 로그인(`ApiRecovery`)으로 바꿀 수 있습니다.
+  - **로그인 후**: 내 정보(401이면 Refresh 한 번만 재시도), 토큰 갱신, 로그아웃. 창을 닫으면 이 기기의 세션을 서버에서 폐기합니다.
+  - 세션 목록에는 `VB6 샘플 <컴퓨터 이름>`으로 표시됩니다(`deviceName`).
 - API 주소는 화면에서 입력합니다(기본값 `http://localhost:5080`). 운영에서는 HTTPS 주소를 쓰고, 서버 인증서 검증을 끄지 마십시오.
 - 소스는 VB6용 **CP949(ANSI)**로 저장되어 있습니다. UTF-8로 저장하면 한글이 깨집니다.
 

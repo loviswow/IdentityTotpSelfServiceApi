@@ -20,6 +20,7 @@
 |2FA-12|setup→enable|setup 직후 같은 Access Token으로 enable|200 (REG-009)|O|
 |AUD-04|감사 로그|로그아웃·비밀번호 변경으로 폐기된 토큰으로 Refresh|`refresh.revoked`(사유), `refresh.reuse` 아님 (REG-010)|O|
 |VB6-01|VB6 샘플 모듈|2FA 사용자 ApiLogin → ApiTotp → ApiGet → ApiRefresh → ApiLogout, 실패 경로|11/11 (REG-011)|E2E|
+|VB6-02|VB6 샘플 로그인 화면|1단계 비밀번호 → 2단계 Google OTP(자동 제출) / 틀린 OTP / 복구 코드 / 처음으로 / 창 닫기|단계 전환·감사 로그 19/19 (`tools/Vb6SampleCheck/LoginFormUiTest.ps1`)|화면 자동화|
 |E2E-01|Web/VB6|`scripts/run-e2e.ps1` 전체 시나리오(가입~QR~세션~관리자~잠금)|Web 53/53, VB6 141/141, VB6 샘플 12/12|E2E|
 |AUD-01|감사 로그|로그인·2FA·복구 코드·로그아웃·2FA 해제|이벤트 기록 + Detail에 토큰/Secret/복구 코드 없음|O|
 |AUD-02|감사 로그|복구 코드 재발급·2FA 초기화|이벤트 기록|O|

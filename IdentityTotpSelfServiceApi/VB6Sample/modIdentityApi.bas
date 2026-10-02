@@ -6,6 +6,9 @@ Public gAccessToken As String
 Public gRefreshToken As String
 ' 마지막 API 호출의 HTTP 상태 코드(연결 실패 시 0). 401/423 등 실패 사유 안내에 쓴다.
 Public gLastStatus As Long
+' 마지막 응답 본문의 "message" 값(없으면 ""). 같은 401이라도 원인을 구분할 때 쓴다.
+'   2차 인증: "Invalid authenticator code." / "Invalid recovery code." = 코드 오류, 빈 값 = challenge 만료·무효
+Public gLastMessage As String
 
 Public Sub ApiInit(ByVal baseUrl As String)
     gBaseUrl = baseUrl
@@ -30,6 +33,15 @@ Public Function ApiTotp(ByVal challengeToken As String, ByVal code As String, Op
     s = HttpJson("POST", "/api/auth/2fa", body, "", status)
     If status <> 200 Then Exit Function
     SaveTokenPair s: ApiTotp = True
+End Function
+
+' Authenticator를 쓸 수 없을 때 복구 코드(xxxxx-xxxxx)로 2차 인증한다. 복구 코드는 한 번만 쓸 수 있다.
+Public Function ApiRecovery(ByVal challengeToken As String, ByVal recoveryCode As String, Optional ByVal deviceName As String = "") As Boolean
+    Dim body As String, s As String, status As Long
+    body = "{""challengeToken"":""" & JsonEscape(challengeToken) & """,""recoveryCode"":""" & JsonEscape(recoveryCode) & """" & DeviceJson(deviceName) & "}"
+    s = HttpJson("POST", "/api/auth/2fa/recovery", body, "", status)
+    If status <> 200 Then Exit Function
+    SaveTokenPair s: ApiRecovery = True
 End Function
 
 Public Function ApiRefresh() As Boolean
@@ -62,9 +74,10 @@ Private Function HttpJson(ByVal method As String, ByVal path As String, ByVal bo
     h.SetTimeouts 5000, 5000, 10000, 10000
     If method = "GET" Then h.Send Else h.Send Utf8Bytes(body)
     status = h.Status: gLastStatus = status: HttpJson = h.ResponseText
+    gLastMessage = JsonString(HttpJson, "message")
     Exit Function
 EH:
-    status = 0: gLastStatus = 0: HttpJson = ""
+    status = 0: gLastStatus = 0: HttpJson = "": gLastMessage = ""
 End Function
 
 Private Function Utf8Bytes(ByVal s As String) As Variant

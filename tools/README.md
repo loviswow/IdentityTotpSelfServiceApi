@@ -97,4 +97,11 @@ node run-browser.mjs  --url  http://localhost:5090 --admin "admin@e2e.local:Admi
 ```
 SampleCheck.exe <API주소> <이메일> <비밀번호> <TOTP키> <결과파일>
 ```
-인자 없이 실행하면 사용법 창을 보여 주고 끝납니다(종료 코드 2). 대상 사용자는 이메일 확인과 2FA 등록이 끝나 있어야 하므로, 보통은 `run-e2e.ps1`로 실행합니다.
+인자 없이 실행하면 사용법 창을 보여 주고 끝납니다(종료 코드 2).
+
+### VB6 샘플 로그인 화면 검증 (`Vb6SampleCheck/LoginFormUiTest.ps1`)
+`VB6Sample/frmLogin.frm`(2단계 로그인 화면)을 실제로 띄워 입력·클릭하며 19개 항목을 확인합니다. 비밀번호 오류, 2단계 전환, 틀린 OTP 자동 제출, 올바른 OTP, 복구 코드, 처음으로, 창 닫기 시 세션 폐기를 다룹니다. VB6 Label은 밖에서 읽을 수 없어 단계 전환은 창 제목으로, 결과는 서버 감사 로그로 확인합니다. 화면을 조작하므로 데스크톱 세션에서 실행하고, `run-e2e.ps1`에는 포함하지 않습니다.
+```powershell
+.\scripts\run-e2e.ps1 -ServeOnly        # 서버가 떠 있지 않다면
+powershell -STA -File .\tools\Vb6SampleCheck\LoginFormUiTest.ps1    # 실패가 있으면 종료 코드 1
+``` 대상 사용자는 이메일 확인과 2FA 등록이 끝나 있어야 하므로, 보통은 `run-e2e.ps1`로 실행합니다.
