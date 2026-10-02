@@ -32,11 +32,14 @@ Sub Main()
     ok = ApiTotp(ch, "000000")
     If Totp(a(3)) <> "000000" Then Check "ApiTotp wrong code -> False, 401", (Not ok) And gLastStatus = 401
 
-    ok = ApiTotp(ch, Totp(a(3)))
+    ok = ApiTotp(ch, Totp(a(3)), "VB6Sample-Check")
     Check "ApiTotp -> True, access/refresh saved", ok And Len(gAccessToken) > 0 And Len(gRefreshToken) > 0
 
     s = ApiGet("/api/account/me", st)
     Check "ApiGet /api/account/me -> 200, email", st = 200 And InStr(1, s, a(1), vbTextCompare) > 0
+
+    s = ApiGet("/api/account/sessions", st)
+    Check "deviceName shown in /api/account/sessions (current session)", st = 200 And InStr(1, s, """deviceName"":""VB6Sample-Check""", vbBinaryCompare) > 0 And InStr(1, s, """current"":true", vbBinaryCompare) > 0
 
     oldRefresh = gRefreshToken
     ok = ApiRefresh()

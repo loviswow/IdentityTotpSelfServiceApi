@@ -24,6 +24,7 @@
   button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
   .state { font-family:Consolas, monospace; font-size:12px; display:grid; grid-template-columns:120px 1fr; gap:2px 8px; word-break:break-all; }
   .state b { color:var(--muted); font-weight:500; }
+  .hint { color:var(--muted); font-size:12px; margin:6px 0 0; }
   #totp { font-size:20px; letter-spacing:.15em; }
   #log { font-family:Consolas, "D2Coding", monospace; font-size:12px; white-space:pre-wrap; word-break:break-all; background:var(--code); border-radius:6px; padding:10px; height:calc(100vh - 170px); min-height:300px; overflow:auto; margin:0; }
   .pass { color:var(--ok); } .fail { color:var(--fail); } .req { color:var(--accent); }
@@ -68,6 +69,9 @@
         <button data-act="reset">2FA Reset</button>
         <button data-act="regen">복구 코드 재발급</button>
         <button data-act="changePw">비밀번호 변경</button>
+        <button data-act="sessions">세션(기기) 목록</button>
+        <button data-act="revokeOthers">다른 기기 로그아웃</button>
+        <button data-act="revokeAll">전체 기기 로그아웃</button>
       </div>
     </section>
     <section>
@@ -78,7 +82,13 @@
       </div>
       <label>대상 UserId <input id="target" placeholder="내 정보 조회 시 자동 입력"></label>
       <label>사유 <input id="reason" value="기기 분실"></label>
-      <div class="btns"><button data-act="adminReset">관리자 2FA 초기화 (현재 토큰)</button></div>
+      <div class="btns">
+        <button data-act="adminReset">관리자 2FA 초기화 (현재 토큰)</button>
+        <button data-act="adminSessions">관리자 세션 조회</button>
+        <button data-act="adminRevokeAll">관리자 전체 로그아웃</button>
+        <button data-act="adminAudit">감사 로그 조회</button>
+      </div>
+      <p class="hint">관리자 API는 Admin 역할 + TOTP로 로그인한 세션(amr=mfa)만 호출할 수 있습니다.</p>
     </section>
     <section>
       <h2>현재 상태</h2>
@@ -94,6 +104,7 @@
       <h2>전체 시나리오</h2>
       <label>관리자 이메일 <input id="adminEmail" placeholder="비우면 관리자 단계 건너뜀"></label>
       <label>관리자 비밀번호 <input id="adminPw" value="Admin!Pass123"></label>
+      <label>관리자 TOTP 키 <input id="adminKey" placeholder="관리자 API는 MFA 세션 필수"></label>
       <div class="btns">
         <button class="primary" data-act="scenario">전체 시나리오 실행</button>
         <button data-act="clear">로그 지우기</button>
@@ -154,8 +165,8 @@ const actions = {
   register: () => api.register($('email').value.trim(), $('pw').value),
   confirm: async () => { const b = await lastMail('Confirm email'); const r = /Confirmation token: ([^;\s]+); userId: (\S+)/.exec(b); return api.confirmEmail(r[2], r[1]); },
   resend: () => api.resendConfirmation($('email').value.trim()),
-  login: () => api.login($('email').value.trim(), $('pw').value),
-  twoFactor: async () => api.twoFactor(st.challenge, await code()),
+  login: () => api.login($('email').value.trim(), $('pw').value, 'Web 테스트 화면'),
+  twoFactor: async () => api.twoFactor(st.challenge, await code(), 'Web 테스트 화면'),
   recovery: () => api.recovery(st.challenge, $('code').value.trim()),
   refresh: () => api.refresh(st.refresh),
   logout: async () => { const r = await api.revoke(st.refresh); if (r.status === 204) { st.access = st.refresh = ''; render(); } return r; },
@@ -169,12 +180,18 @@ const actions = {
   changePw: async () => { const r = await api.changePassword(st.access, $('pw').value, $('npw').value); if (r.status === 204) $('pw').value = $('npw').value; return r; },
   forgot: () => api.forgotPassword($('email').value.trim()),
   resetPw: async () => { const t = /Reset token: (\S+)/.exec(await lastMail('Password reset'))[1]; const r = await api.resetPassword($('email').value.trim(), t, $('npw').value); if (r.status === 204) $('pw').value = $('npw').value; return r; },
+  sessions: () => api.sessions(st.access),
+  revokeOthers: () => api.revokeOtherSessions(st.access),
+  revokeAll: async () => { const r = await api.revokeAllSessions(st.access); if (r.status === 204) { st.access = st.refresh = ''; render(); } return r; },
   adminReset: () => api.adminReset2fa(st.access, $('target').value.trim(), $('reason').value),
+  adminSessions: () => api.adminSessions(st.access, $('target').value.trim()),
+  adminRevokeAll: () => api.adminRevokeAllSessions(st.access, $('target').value.trim(), $('reason').value),
+  adminAudit: () => api.adminAuditLogs(st.access, { userId: $('target').value.trim(), limit: 20 }),
 };
 
 async function runAll() {
   $('summary').textContent = '실행 중…';
-  const r = await runScenario({ base: '', adminEmail: $('adminEmail').value.trim(), adminPassword: $('adminPw').value, log });
+  const r = await runScenario({ base: '', adminEmail: $('adminEmail').value.trim(), adminPassword: $('adminPw').value, adminTotpKey: $('adminKey').value.trim(), log });
   const pass = r.results.filter((x) => x.ok).length;
   $('summary').textContent = `${pass}/${r.results.length} 통과`;
   $('summary').className = r.failed.length ? 'fail' : 'pass';
@@ -204,7 +221,7 @@ setInterval(async () => {
 $('email').value = `ui-${Math.random().toString(16).slice(2, 8)}@e2e.local`;
 fetch('/dev/config').then((r) => r.json()).then((c) => { $('cfg').textContent = `API ${c.apiUrl} · 테스트 메일 ${c.mail ? '사용' : '없음 (확인/재설정 메일 버튼 사용 불가)'}`; }).catch(() => {});
 const q = new URLSearchParams(location.search);
-if (q.get('admin')) { const [a, ...p] = q.get('admin').split(':'); $('adminEmail').value = a; $('adminPw').value = p.join(':'); }
+if (q.get('admin')) { const [a, p, k] = q.get('admin').split(':'); $('adminEmail').value = a; $('adminPw').value = p ?? ''; $('adminKey').value = k ?? ''; }
 if (q.has('autorun')) runAll();
 render();
 </script>

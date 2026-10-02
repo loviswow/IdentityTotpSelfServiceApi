@@ -12,9 +12,10 @@ Public Sub ApiInit(ByVal baseUrl As String)
     If Right$(gBaseUrl, 1) = "/" Then gBaseUrl = Left$(gBaseUrl, Len(gBaseUrl) - 1)
 End Sub
 
-Public Function ApiLogin(ByVal email As String, ByVal password As String, ByRef requires2FA As Boolean, ByRef challengeToken As String) As Boolean
+' deviceName: 세션(로그인 기기) 목록에 보일 이름(선택). 예: "영업관리 " & Environ$("COMPUTERNAME")
+Public Function ApiLogin(ByVal email As String, ByVal password As String, ByRef requires2FA As Boolean, ByRef challengeToken As String, Optional ByVal deviceName As String = "") As Boolean
     Dim body As String, s As String, status As Long
-    body = "{""email"":""" & JsonEscape(email) & """,""password"":""" & JsonEscape(password) & """}"
+    body = "{""email"":""" & JsonEscape(email) & """,""password"":""" & JsonEscape(password) & """" & DeviceJson(deviceName) & "}"
     s = HttpJson("POST", "/api/auth/login", body, "", status)
     If status <> 200 Then Exit Function
     requires2FA = JsonBool(s, "requiresTwoFactor")
@@ -22,9 +23,10 @@ Public Function ApiLogin(ByVal email As String, ByVal password As String, ByRef 
     ApiLogin = True
 End Function
 
-Public Function ApiTotp(ByVal challengeToken As String, ByVal code As String) As Boolean
+' 2FA 사용자는 세션이 여기서 만들어지므로 ApiLogin과 같은 deviceName을 넘긴다.
+Public Function ApiTotp(ByVal challengeToken As String, ByVal code As String, Optional ByVal deviceName As String = "") As Boolean
     Dim body As String, s As String, status As Long
-    body = "{""challengeToken"":""" & JsonEscape(challengeToken) & """,""code"":""" & JsonEscape(code) & """}"
+    body = "{""challengeToken"":""" & JsonEscape(challengeToken) & """,""code"":""" & JsonEscape(code) & """" & DeviceJson(deviceName) & "}"
     s = HttpJson("POST", "/api/auth/2fa", body, "", status)
     If status <> 200 Then Exit Function
     SaveTokenPair s: ApiTotp = True
@@ -75,6 +77,10 @@ Private Sub SaveTokenPair(ByVal json As String)
     gAccessToken = JsonString(json, "accessToken")
     gRefreshToken = JsonString(json, "refreshToken")
 End Sub
+
+Private Function DeviceJson(ByVal deviceName As String) As String
+    If Len(deviceName) > 0 Then DeviceJson = ",""deviceName"":""" & JsonEscape(deviceName) & """"
+End Function
 
 Private Function JsonEscape(ByVal s As String) As String
     s = Replace(s, "\", "\\"): s = Replace(s, Chr$(34), "\" & Chr$(34)): s = Replace(s, vbCrLf, "\n")

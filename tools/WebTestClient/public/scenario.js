@@ -37,8 +37,8 @@ export function createApi(base) {
   return {
     call,
     register: (email, password) => call('POST', '/api/auth/register', { email, password }),
-    login: (email, password) => call('POST', '/api/auth/login', { email, password }),
-    twoFactor: (challengeToken, code) => call('POST', '/api/auth/2fa', { challengeToken, code }),
+    login: (email, password, deviceName) => call('POST', '/api/auth/login', { email, password, deviceName }),
+    twoFactor: (challengeToken, code, deviceName) => call('POST', '/api/auth/2fa', { challengeToken, code, deviceName }),
     recovery: (challengeToken, recoveryCode) => call('POST', '/api/auth/2fa/recovery', { challengeToken, recoveryCode }),
     refresh: (refreshToken) => call('POST', '/api/auth/token/refresh', { refreshToken }),
     revoke: (refreshToken) => call('POST', '/api/auth/token/revoke', { refreshToken }),
@@ -54,7 +54,14 @@ export function createApi(base) {
     disable2fa: (at, password, code) => call('POST', '/api/account/2fa/disable', { password, code }, at),
     reset2fa: (at, password, code) => call('POST', '/api/account/2fa/reset', { password, code }, at),
     regenerateCodes: (at, code) => call('POST', '/api/account/2fa/recovery-codes/regenerate', { code }, at),
+    sessions: (at) => call('GET', '/api/account/sessions', undefined, at),
+    revokeSession: (at, sessionId) => call('DELETE', `/api/account/sessions/${encodeURIComponent(sessionId)}`, undefined, at),
+    revokeOtherSessions: (at) => call('POST', '/api/account/sessions/revoke-others', undefined, at),
+    revokeAllSessions: (at) => call('POST', '/api/account/sessions/revoke-all', undefined, at),
     adminReset2fa: (at, userId, reason) => call('POST', '/api/admin/users/2fa/reset', { userId, reason }, at),
+    adminSessions: (at, userId) => call('GET', `/api/admin/users/${encodeURIComponent(userId)}/sessions`, undefined, at),
+    adminRevokeAllSessions: (at, userId, reason) => call('POST', '/api/admin/users/sessions/revoke-all', { userId, reason }, at),
+    adminAuditLogs: (at, query) => call('GET', '/api/admin/audit-logs?' + new URLSearchParams(query), undefined, at),
     // 테스트 메일(PickupDirectory) 조회. server.js 전용.
     mails: async (to) => (await call('GET', '/dev/mail?to=' + encodeURIComponent(to))).json ?? [],
   };
@@ -63,7 +70,7 @@ export function createApi(base) {
 // ---------- 시나리오 ----------
 class StepError extends Error {}
 
-export async function runScenario({ base, adminEmail, adminPassword, log = console.log }) {
+export async function runScenario({ base, adminEmail, adminPassword, adminTotpKey, log = console.log }) {
   const api = createApi(base);
   const results = [];
   const id = Math.random().toString(16).slice(2, 10);
@@ -94,8 +101,8 @@ export async function runScenario({ base, adminEmail, adminPassword, log = conso
     const r = /Confirmation token: ([^;\s]+); userId: (\S+)/.exec(m.body);
     check(r, '확인 메일 형식이 다릅니다'); return { token: r[1], userId: r[2] };
   };
-  const loginTokens = async (password = pw) => {
-    const j = expect(await api.login(email, password), 200, '로그인');
+  const loginTokens = async (password = pw, deviceName) => {
+    const j = expect(await api.login(email, password, deviceName), 200, '로그인');
     check(j.requiresTwoFactor === false && j.accessToken && j.refreshToken, '2FA 미사용 로그인은 토큰을 바로 받아야 합니다');
     return j;
   };
@@ -237,23 +244,83 @@ export async function runScenario({ base, adminEmail, adminPassword, log = conso
     pw = npw; s.t = await loginTokens();
   });
 
-  // --- 관리자 ---
+  // --- 세션(기기) 관리 ---
+  const sessionOf = (list, deviceName) => list.find(x => x.deviceName === deviceName);
+  await step('SESSION 기기 이름으로 로그인 → 세션 목록에 표시, 현재 세션 표시', async () => {
+    s.pc = await loginTokens(pw, 'E2E-PC'); s.phone = await loginTokens(pw, 'E2E-Phone');
+    const list = expect(await api.sessions(s.pc.accessToken), 200, '세션 목록');
+    const pc = sessionOf(list, 'E2E-PC'), phone = sessionOf(list, 'E2E-Phone');
+    check(pc && phone, `두 기기가 목록에 있어야 합니다: ${JSON.stringify(list)}`);
+    check(pc.current === true && phone.current === false, '현재 세션 표시가 맞지 않습니다');
+    check(!JSON.stringify(list).includes(s.pc.refreshToken), '세션 목록에 Refresh Token이 노출되었습니다');
+    s.phoneSession = phone.sessionId;
+  });
+  await step('SESSION 특정 기기 로그아웃 → 그 기기 Access/Refresh 401, 다른 기기 유지', async () => {
+    expect(await api.revokeSession(s.pc.accessToken, s.phoneSession), 204, '세션 폐기');
+    expect(await api.me(s.phone.accessToken), 401, '폐기한 기기 access');
+    expect(await api.refresh(s.phone.refreshToken), 401, '폐기한 기기 refresh');
+    expect(await api.me(s.pc.accessToken), 200, '현재 기기 access');
+    expect(await api.revokeSession(s.pc.accessToken, 'no-such-session'), 404, '없는 세션');
+  });
+  await step('SESSION 다른 기기 모두 로그아웃 → 현재 기기만 남음', async () => {
+    const tablet = await loginTokens(pw, 'E2E-Tablet');
+    const j = expect(await api.revokeOtherSessions(s.pc.accessToken), 200, 'revoke-others');
+    check(j.revokedSessions >= 1, `revokedSessions=${j.revokedSessions}`);
+    expect(await api.me(tablet.accessToken), 401, '다른 기기 access');
+    expect(await api.refresh(tablet.refreshToken), 401, '다른 기기 refresh');
+    const list = expect(await api.sessions(s.pc.accessToken), 200, '세션 목록');
+    check(list.length === 1 && list[0].current === true, `현재 세션만 남아야 합니다: ${JSON.stringify(list)}`);
+  });
+  await step('SESSION 로그아웃한 세션의 Access Token → 401', async () => {
+    expect(await api.revoke(s.pc.refreshToken), 204, '로그아웃');
+    expect(await api.me(s.pc.accessToken), 401, '로그아웃 후 access');
+  });
+  await step('SESSION 전체 기기 로그아웃 → 모든 Access/Refresh 401', async () => {
+    const a = await loginTokens(pw, 'E2E-A'), b = await loginTokens(pw, 'E2E-B');
+    expect(await api.revokeAllSessions(a.accessToken), 204, 'revoke-all');
+    for (const t of [a, b]) {
+      expect(await api.me(t.accessToken), 401, '전체 로그아웃 후 access');
+      expect(await api.refresh(t.refreshToken), 401, '전체 로그아웃 후 refresh');
+    }
+    s.t = await loginTokens();
+  });
+
+  // --- 관리자 (Admin 역할 + MFA 세션 필수) ---
   await step('ADMIN 일반 사용자 호출 → 403', async () => expect(await api.adminReset2fa(s.t.accessToken, s.userId, 'test'), 403, '일반 사용자'));
-  if (adminEmail && adminPassword) {
+  if (adminEmail && adminPassword && adminTotpKey) {
+    await step('ADMIN 관리자 TOTP 로그인 → MFA 세션', async () => {
+      const l = expect(await api.login(adminEmail, adminPassword, 'E2E-Admin'), 200, '관리자 로그인');
+      check(l.requiresTwoFactor === true, '관리자는 2FA가 켜져 있어야 합니다(관리자 API는 MFA 세션 필수)');
+      s.admin = expect(await api.twoFactor(l.challengeToken, await totp(adminTotpKey), 'E2E-Admin'), 200, '관리자 TOTP');
+    });
     await step('ADMIN 사유 없음 → 400, 없는 사용자 → 404, 정상 → 204', async () => {
       s.key = expect(await api.setup2fa(s.t.accessToken), 200, 'setup').sharedKey;
       expect(await api.enable2fa(s.t.accessToken, await totp(s.key)), 200, 'enable');
       const target = await login2fa();
-      const al = expect(await api.login(adminEmail, adminPassword), 200, '관리자 로그인');
-      check(al.accessToken, '관리자 계정은 2FA 없이 로그인되어야 합니다(테스트 전제)');
-      expect(await api.adminReset2fa(al.accessToken, s.userId, ''), 400, '사유 없음');
-      expect(await api.adminReset2fa(al.accessToken, 'no-such-user', 'test'), 404, '없는 사용자');
-      expect(await api.adminReset2fa(al.accessToken, s.userId, 'E2E 기기 분실'), 204, '관리자 초기화');
+      const at = s.admin.accessToken;
+      expect(await api.adminReset2fa(at, s.userId, ''), 400, '사유 없음');
+      expect(await api.adminReset2fa(at, 'no-such-user', 'test'), 404, '없는 사용자');
+      expect(await api.adminReset2fa(at, s.userId, 'E2E 기기 분실'), 204, '관리자 초기화');
       expect(await api.refresh(target.refreshToken), 401, '관리자 초기화 후 refresh');
       expect(await api.me(target.accessToken), 401, '관리자 초기화 후 access');
       s.t = await loginTokens(); // 2FA 해제됨
     });
-  } else skip('ADMIN 관리자 2FA 초기화', '관리자 계정이 주어지지 않음');
+    await step('ADMIN 감사 로그 조회 → 초기화 기록과 수행자(ActorUserId)', async () => {
+      const items = expect(await api.adminAuditLogs(s.admin.accessToken, { userId: s.userId, eventType: 'admin.2fa.reset', limit: 5 }), 200, '감사 로그');
+      check(items.some(x => x.detail === 'E2E 기기 분실' && x.actorUserId && x.actorUserId !== s.userId), `초기화 기록이 없습니다: ${JSON.stringify(items)}`);
+      expect(await api.adminAuditLogs(s.admin.accessToken, { limit: 1000 }), 400, 'limit 초과');
+    });
+    await step('ADMIN 대상 세션 조회 → 전체 로그아웃 → 대상 토큰 401', async () => {
+      const t = await loginTokens(pw, 'E2E-Target');
+      const list = expect(await api.adminSessions(s.admin.accessToken, s.userId), 200, '대상 세션 목록');
+      check(sessionOf(list, 'E2E-Target'), `대상 세션이 없습니다: ${JSON.stringify(list)}`);
+      expect(await api.adminRevokeAllSessions(s.admin.accessToken, s.userId, ''), 400, '사유 없음');
+      expect(await api.adminRevokeAllSessions(s.admin.accessToken, s.userId, 'E2E 침해 대응'), 204, '전체 로그아웃');
+      expect(await api.me(t.accessToken), 401, '대상 access');
+      expect(await api.refresh(t.refreshToken), 401, '대상 refresh');
+      s.t = await loginTokens();
+    });
+  } else skip('ADMIN 관리자 API', '관리자 계정(email:password:totpKey)이 주어지지 않음');
 
   // --- 계정 잠금 (마지막: 계정이 잠긴다) ---
   await step('AUTH 비밀번호 5회 실패 → 정상 비밀번호도 423', async () => {

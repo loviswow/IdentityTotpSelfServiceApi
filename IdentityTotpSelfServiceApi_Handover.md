@@ -172,6 +172,12 @@ Recovery Code는 사용자에게 한 번 표시하고 안전한 장소에 별도
 | POST | `/api/account/2fa/disable` | 2FA 비활성화 |
 | POST | `/api/account/2fa/reset` | Authenticator 재등록 |
 | POST | `/api/account/2fa/recovery-codes/regenerate` | Recovery Code 재발급 |
+| GET | `/api/account/sessions` | 로그인 기기(세션) 목록 (39장) |
+| DELETE | `/api/account/sessions/{sessionId}` | 특정 기기 로그아웃 |
+| POST | `/api/account/sessions/revoke-others` | 현재 기기 외 모두 로그아웃 |
+| POST | `/api/account/sessions/revoke-all` | 전체 기기 로그아웃 |
+
+로그인(`/login`, `/2fa`, `/2fa/recovery`) 요청에는 선택 항목 `deviceName`(최대 128자)을 보낼 수 있다. 세션 목록에 표시된다.
 
 ## 계정 복구
 
@@ -184,17 +190,20 @@ Recovery Code는 사용자에게 한 번 표시하고 안전한 장소에 별도
 
 메일로 전달되는 토큰은 Base64Url로 인코딩되어 있다.
 
-운영 환경에서는 실제 SMTP 또는 메일 서비스 구현체 연결이 필요하다.
+운영 환경에서는 `Email:Smtp:*`를 설정해 SMTP로 발송한다(41장).
 
 ## 관리자
 
 | Method | API | 설명 |
 |---|---|---|
 | POST | `/api/admin/users/2fa/reset` | 대상 사용자 2FA 초기화 (`userId`, `reason`) |
+| GET | `/api/admin/users/{userId}/sessions` | 대상 사용자 세션 목록 |
+| POST | `/api/admin/users/sessions/revoke-all` | 대상 사용자 전체 기기 로그아웃 (`userId`, `reason`) |
+| GET | `/api/admin/audit-logs` | 감사 로그 조회 (`userId`, `eventType`, `from`, `to`, `limit` 1~500) |
 
-- `Admin` 역할이 있는 사용자만 호출할 수 있다. 일반 사용자가 호출하면 403이다.
-- `reason`은 필수이며, 없으면 400이다.
-- 역할을 부여하는 API는 없다. `AspNetRoles`, `AspNetUserRoles` 테이블에 직접 등록한다.
+- Admin 역할(요청마다 DB 확인) + 2차 인증을 거친 세션(`amr=mfa`) + 2FA 활성 상태여야 한다. 하나라도 아니면 403이다(40장).
+- `reason`은 필수이며 500자까지다. 없거나 길면 400이다. 자기 계정의 2FA 초기화는 400이다.
+- 역할을 부여하는 API는 없다. `AspNetRoles`, `AspNetUserRoles` 테이블에 직접 등록한다. 관리자 계정은 2FA를 먼저 켜야 관리자 API를 쓸 수 있다.
 
 `/api/auth/**` 아래의 모든 API에는 IP별 Rate Limit(`auth` 정책)이 적용된다.
 
@@ -232,9 +241,11 @@ SecurityStamp는 중요한 보안 변경 후 기존 인증 상태를 무효화�
 - 비밀번호 재설정
 - 관리자 2FA 초기화
 - Authenticator 초기화
-- 보안상 강제 로그아웃
+- 보안상 강제 로그아웃 (사용자 전체 기기 로그아웃, 관리자 전체 기기 로그아웃)
 
 Access JWT 검증 시 DB의 현재 SecurityStamp와 Token의 값을 비교하는 구조를 적용하여 중요한 보안 변경 후 기존 Access Token도 거부할 수 있도록 설계했다.
+
+세션 단위 무효화도 함께 쓴다. Access Token의 `sid` 클레임은 함께 발급된 Refresh Token family(세션)를 가리킨다. `OnTokenValidated`는 그 세션에 아직 쓸 수 있는 Refresh Token이 있는지 확인하고, 없으면 거부한다. 그래서 로그아웃, 특정 기기 로그아웃, 재사용 탐지로 세션이 끝나면 그 세션의 Access Token만 바로 무효가 된다. 다른 기기는 영향을 받지 않는다(39장).
 
 ---
 
@@ -366,7 +377,7 @@ Logout 이후 동일 Refresh Token으로 Refresh를 시도하면 실패해야 �
 
 JWT Access Token은 기본적으로 stateless이므로 단순 Logout만으로 이미 발급된 JWT가 즉시 사라지는 것은 아니다.
 
-본 프로젝트에서는 SecurityStamp 검증 및 Refresh Token 폐기 정책을 함께 사용한다.
+본 프로젝트에서는 SecurityStamp 검증 및 Refresh Token 폐기 정책을 함께 사용한다. 2026-10-02부터는 Access Token의 `sid`로 세션 상태도 확인하므로, 로그아웃한 세션의 Access Token은 만료 전이라도 바로 401이 된다(7장, 39장).
 
 ---
 
@@ -731,6 +742,7 @@ REG-004, REG-005, REG-007 이후 SecurityStamp를 변경하는 모든 경로는 
 - 2FA 비활성화
 - Authenticator 초기화
 - 관리자 2FA 초기화
+- 전체 기기 로그아웃 (사용자 `/api/account/sessions/revoke-all`, 관리자 `/api/admin/users/sessions/revoke-all`)
 
 SecurityStamp를 변경하는 새 기능을 추가할 때도 `RefreshTokenService.RevokeAllAsync`를 함께 호출해야 한다.
 
@@ -810,7 +822,57 @@ setup을 호출한 Access Token이 즉시 무효가 되었다. 그래서 바로 
 - 401이면 Refresh를 1회만 재시도한다.
 - 423(잠금)은 따로 안내한다.
 
-회귀 테스트: `tools/Vb6SampleCheck`. `modIdentityApi.bas`를 그대로 포함해 실제 API로 11개 항목을 검증하며, `scripts/run-e2e.ps1`에 포함되어 있다.
+회귀 테스트: `tools/Vb6SampleCheck`. `modIdentityApi.bas`를 그대로 포함해 실제 API로 검증하며(2026-10-02 기준 12개 항목), `scripts/run-e2e.ps1`에 포함되어 있다.
+
+---
+
+## REG-012 긴 User-Agent로 로그인하면 500
+
+문제:
+
+`AuditService`가 요청의 User-Agent를 길이 제한 없이 `AuditLogs.UserAgent`(`nvarchar(512)`)에 저장했다.
+
+결과:
+
+SQL Server에서는 User-Agent가 512자를 넘으면 감사 로그 저장이 실패한다. 감사 로그는 로그인·Refresh 등 모든 인증 API에서 쓰므로, 그런 클라이언트는 로그인 자체가 500이 되었다. InMemory DB는 길이를 검사하지 않아 기존 테스트로는 드러나지 않았다. 세션 관리 기능을 만들면서 User-Agent를 다루다가 발견했다(2026-10-02).
+
+개선:
+
+`AuditService`가 User-Agent는 512자, `Detail`은 2000자로 잘라 저장한다. 세션에 저장하는 User-Agent(`RefreshTokens.UserAgent`)도 512자로 자른다.
+
+회귀 테스트: `RegressionTests.Login_WithVeryLongUserAgent_Succeeds`. SQL Server 모드에서 수정 전 코드로 실패하고 수정 후 통과하는 것을 확인했다.
+
+---
+
+## REG-013 회전과 동시에 폐기하면 폐기가 실패 (보안)
+
+문제:
+
+로그아웃, 비밀번호 변경, 2FA 변경, 관리자 초기화의 Refresh Token 폐기(`RevokeAsync`, `RevokeAllAsync`)는 토큰을 읽고 `Version`을 바꿔 저장한다. 읽은 뒤 저장하기 전에 같은 토큰이 회전되면 `DbUpdateConcurrencyException`이 그대로 던져졌다. v4 원본부터 있던 결함이며, 같은 방식으로 만든 새 세션 폐기 API도 마찬가지였다.
+
+결과:
+
+API는 500을 반환하고, 저장이 원자적이라 **아무 토큰도 폐기되지 않았다**. 훔친 Refresh Token으로 Refresh를 반복하는 공격자가 있으면, 피해자가 비밀번호를 바꾸거나 전체 로그아웃을 해도 공격자의 새 토큰이 살아남는다. SecurityStamp는 먼저 바뀌므로 Access Token은 끊기지만, Refresh로 새 stamp의 Access Token을 다시 받을 수 있다(REG-004 우회). 독립 코드 리뷰에서 지적되었다(2026-10-02).
+
+개선:
+
+- 폐기는 활성(폐기·만료되지 않은) 토큰만 대상으로 하고, 동시성 충돌이 나면 다시 읽어 재시도한다. 다시 읽으면 회전으로 생긴 새 토큰도 대상에 들어간다(`RefreshTokenService.RevokeActiveAsync`).
+- 로그아웃은 제출한 토큰의 세션(family) 전체를 폐기한다. 보통은 그 토큰 하나다.
+- 충돌 처리에서 `ChangeTracker.Clear()`를 쓰지 않는다. 같은 컨텍스트의 사용자 엔티티까지 떼어 내기 때문이다. RefreshToken 추적만 푼다.
+
+회귀 테스트: `RevokeRaceTests.Revoke_WhenTokenIsRotatedConcurrently_StillRevokesTheRotatedToken`(logout / session / revoke-all / change-password). 테스트 DbContext의 `BeforeSaveHook`으로 폐기 저장 직전에 다른 컨텍스트에서 실제 회전을 일으켜 확정적으로 재현한다. 수정 전 4건 모두 실패, 수정 후 통과.
+
+같은 리뷰에서 함께 고친 점:
+- 만료 토큰 정리가 살아 있는 세션의 오래된 회전 토큰까지 지우면, 그 토큰이 다시 들어왔을 때 재사용 탐지가 동작하지 않았다. 세션의 모든 토큰이 보존 기간을 넘겨 만료된 경우에만 지운다(`SessionTests.Purge_KeepsOldRotatedTokenOfLiveFamily_SoReuseIsStillDetected`).
+- 정리 작업이 여러 인스턴스에서 같은 행을 지우다 충돌하면 그 회차를 중단했다. 충돌한 배치를 다시 조회해 계속한다.
+- 메일 발송이 영구 오류(5xx, 없는 주소 등)도 재시도하며 단일 작업자를 수 분씩 붙잡았다. 영구 오류는 바로 `email.failed`로 남기고, 작업자를 여러 개(`Email:Smtp:MaxConcurrency`, 기본 4) 둔다(`SmtpEmailTests.PermanentSmtpFailure_IsNotRetried_AndIsAudited`).
+
+---
+
+## 2026-10-02 기능 추가 중 테스트 변경과 발견 사항
+
+- `RegressionTests.AdminReset2Fa_Disables2Fa`: 관리자 API가 MFA 세션을 요구하게 되었으므로(40장), 관리자가 2FA를 켜고 TOTP로 로그인하도록 준비 단계만 바꿨다. 검증 내용(Assert)은 그대로다.
+- SMTP 재시도 설정(`Email:Smtp:RetryDelaysSeconds`)을 속성 초기값으로 기본값을 두었더니, 설정 바인더가 설정값을 기본값 뒤에 덧붙였다(`5,30,120,0.2,0.2`). 배포 전 테스트(`SmtpDownTests`)에서 발견해 기본값을 사용 시점에 적용하도록 고쳤다. 회귀 테스트: `SmtpEmailTests.RetryDelays_FromConfig_ReplaceDefaults`. 배열 설정을 추가할 때 같은 함정에 주의한다.
 
 ---
 
@@ -913,11 +975,19 @@ Token 문자열을 로그 파일이나 화면에 그대로 출력하지 않는�
 | | `2fa.recovery-codes.regenerate` / `.failed` | 복구 코드 재발급 / TOTP 오류 |
 | 토큰 | `refresh.success` / `refresh.failed` | Refresh 성공 / 실패(`Detail`: `unknown`, `expired`, `user-missing`) |
 | | `refresh.reuse` | **탈취 의심.** 이미 회전된 토큰의 재사용(family 전체 폐기), 또는 동시 회전 충돌(`Detail`: `concurrent`) |
-| | `refresh.revoked` | 정상적으로 폐기된 토큰으로 갱신 시도. `Detail`: 폐기 사유(`user-revoke`, `password-change`, `password-reset`, `2fa-enable`, `2fa-disable`, `2fa-reset`, `admin-2fa-reset`, `refresh-token-reuse`) |
+| | `refresh.revoked` | 정상적으로 폐기된 토큰으로 갱신 시도. `Detail`: 폐기 사유(`user-revoke`, `password-change`, `password-reset`, `2fa-enable`, `2fa-disable`, `2fa-reset`, `admin-2fa-reset`, `refresh-token-reuse`, `session-revoke`, `session-revoke-others`, `session-revoke-all`, `admin-session-revoke-all`) |
 | | `logout` / `logout.failed` | Refresh Token 폐기 / 없거나 이미 폐기된 토큰 |
+| 세션 | `session.revoke` | 특정 기기 로그아웃 (`Detail`: sessionId) |
+| | `session.revoke-others` / `session.revoke-all` | 다른 기기 모두 / 전체 기기 로그아웃 (`Detail`: `revokedSessions=n`) |
 | 비밀번호 | `password.change` | 비밀번호 변경 |
 | | `password.reset` | 비밀번호 재설정 |
 | 관리자 | `admin.2fa.reset` | 관리자 2FA 초기화 (사유는 `Detail`에 기록) |
+| | `admin.sessions.read` / `admin.sessions.revoke-all` | 대상 사용자 세션 조회 / 전체 기기 로그아웃 (사유는 `Detail`) |
+| | `admin.audit.read` | 감사 로그 조회. `UserId`=조회한 관리자, `Detail`=조회 조건과 결과 수 |
+| | `admin.denied` | 관리자 API 거부(403). `UserId`=호출자, `Detail`=`not-admin` 또는 `mfa-required` |
+| 메일 | `email.failed` | 재시도까지 모두 실패한 메일. `UserId`=수신자 계정(있으면), `Detail`=메일 제목 |
+
+`ActorUserId` 열(003 스크립트)은 요청을 보낸 인증된 사용자다. 관리자 작업이면 `UserId`는 대상 사용자, `ActorUserId`는 관리자다. 본인 작업이면 둘이 같고, 로그인 전 요청이나 백그라운드 작업이면 비어 있다.
 
 보안 모니터링 경보는 `refresh.reuse`에만 건다. `refresh.revoked`는 로그아웃한 앱이 예전 토큰으로 재시도하는 등 정상 상황에서도 발생한다(REG-010).
 
@@ -1084,13 +1154,28 @@ TOTP는 시간 기반 인증 방식이므로 서버 시간이 정확해야 한�
 | 감사 로그 | 전체 이벤트 기록, `Detail`에 토큰 원문 없음 |
 | GitHub Actions CI (`ci.yml`, ubuntu-latest + SQL Server 2022 컨테이너) | 성공. Migration 적용, Release 빌드, SQL Server 테스트, TRX Artifact 업로드 전 단계 통과 ([run #1](https://github.com/loviswow/IdentityTotpSelfServiceApi/actions/runs/36848395947), `3420c69`) |
 
+2026-10-02 관리자 보안·세션 관리·SMTP 추가 후 다시 확인했다(같은 PC).
+
+| 항목 | 결과 |
+|---|---|
+| SQL Migration `003` 적용 / 재적용 / rollback / rollback 재실행 / 재적용 | 성공 |
+| `dotnet build -c Release` | 경고 0, 오류 0. `dotnet list package --vulnerable` 취약 패키지 없음(MailKit 4.18.1 추가) |
+| xUnit (InMemory, 반복 실행) | 58/58 통과 |
+| xUnit (SQL Server, 반복 실행) | 58/58 통과 |
+| REG-012, REG-013 재현 | 수정 전 코드로 실패(REG-012는 SQL Server), 수정 후 통과 |
+| SMTP | MailKit으로 테스트 SMTP 서버(xUnit 내장)에 실제 SMTP 대화(EHLO/AUTH PLAIN/MAIL/RCPT/DATA)로 전달. 일시 장애 재시도, 서버 다운 시 API 무영향과 `email.failed` 기록 |
+| E2E Web (Node / 헤드리스 Chrome) | 각 52/52 통과 (세션 5단계, 관리자 MFA 로그인·감사 조회·세션 관리 포함) |
+| E2E VB6 (`Vb6TestClient.exe`) | 139/139 통과 |
+| VB6 샘플 모듈 (`tools/Vb6SampleCheck`) | 12/12 통과 (deviceName → 세션 목록 표시 포함) |
+| 감사 로그 | 새 이벤트(`session.*`, `admin.*`) 기록, `Detail`에 토큰 원문 없음 |
+
 E2E 재실행 방법은 `scripts/run-e2e.ps1`, 테스트 클라이언트 사용법은 `tools/README.md`를 참고한다.
 
 아직 확인되지 않은 항목:
 
 ```text
 Authenticator 실제 기기(휴대폰 앱) 테스트
-메일 실제 발송 (SMTP 구현체 미구현, 개발용 PickupDirectory만 검증)
+실제 SMTP 서버로 메일 발송·수신 (SMTP 구현은 테스트 SMTP 서버로 검증. 운영 SMTP 계정 정보가 있어야 확인 가능)
 실제 VB6 업무 프로그램 연동 (테스트 클라이언트로만 검증)
 운영 Reverse Proxy/HTTPS/Forwarded Headers 테스트
 운영 Secret 외부화, DB Backup/Rollback 절차
@@ -1153,6 +1238,8 @@ TOTP 테스트는 시간 의존성이 있으므로 시스템 시간과 허용 Wi
 
 실제 SMTP 또는 사내 메일 시스템 연결.
 
+→ 2026-10-02 SMTP 발송 구현(41장). 운영 SMTP 서버로 실제 수신 확인만 남았다.
+
 ## 우선순위 3
 
 VB6 실제 프로그램에서 End-to-End 테스트.
@@ -1175,6 +1262,8 @@ VB6 Login
 - 관리자 2FA Reset 사유 기록
 - 관리자 Audit 강화
 
+→ 2026-10-02 구현(40장).
+
 ## 우선순위 5
 
 Refresh Token 관리 강화.
@@ -1184,6 +1273,8 @@ Refresh Token 관리 강화.
 - 사용자별 로그인 기기 조회
 - 특정 기기 강제 Logout
 - 전체 기기 Logout
+
+→ 2026-10-02 구현(39장).
 
 ---
 
@@ -1238,8 +1329,10 @@ IdentityTotpSelfServiceApi_v4/
 [x] TOTP/Recovery Code 반복 실패 시 423 Lock
 [x] 관리자 2FA Reset 성공
 [x] 일반 사용자 Admin API 403
+[x] 비밀번호만으로 로그인한 관리자 Admin API 403 (MFA 필수)
+[x] 특정 기기 / 다른 기기 / 전체 기기 로그아웃 후 해당 Access·Refresh 실패
 [x] Rate Limit 429 확인 (xUnit)
-[ ] 이메일 확인/재설정 실제 발송 성공   (개발용 PickupDirectory로 흐름만 검증)
+[ ] 이메일 확인/재설정 실제 발송 성공   (SMTP 구현 완료, 테스트 SMTP 서버로 검증. 운영 SMTP로 실제 수신 확인 필요)
 [x] VB6 Login/TOTP/Refresh/Logout 성공   (VB6 테스트 클라이언트. 실제 업무 프로그램은 미검증)
 [x] 감사 로그 확인
 [ ] 운영 Secret 외부화
@@ -1277,6 +1370,127 @@ Regression Test
 ```
 
 향후 변경 시에도 보안 결함을 발견하면 반드시 재현 테스트를 먼저 남기고 수정 후 전체 회귀 테스트를 수행하는 원칙을 유지한다.
+
+---
+
+# 39. 세션(기기) 관리와 만료 토큰 정리 (2026-10-02)
+
+35장 우선순위 5를 구현했다.
+
+## 세션 모델
+
+```text
+로그인(/login, /2fa, /2fa/recovery)
+   |
+   +-- Refresh Token 발급 (새 FamilyId = 세션 ID, DeviceName, UserAgent 저장)
+   +-- Access Token 발급 (sid = FamilyId)
+
+Refresh 회전 → 같은 FamilyId 안에서 새 토큰. DeviceName/UserAgent를 이어받는다.
+세션이 "활성" = family에 폐기되지 않고 만료되지 않은 토큰이 있다.
+```
+
+- 세션 ID는 FamilyId(32자 hex)다. 토큰이나 해시가 아니므로 응답에 내보내도 된다.
+- `OnTokenValidated`는 SecurityStamp 확인에 더해 `sid` 세션이 활성인지 확인한다(`RefreshTokenService.IsSessionActiveAsync`). 요청마다 인덱스(`IX_RefreshTokens_UserId_FamilyId`) 조회가 하나 늘어난다.
+- `sid`가 없는 이전 버전 Access Token은 세션 확인을 건너뛴다. 배포 직후에도 기존 로그인이 끊기지 않는다(최대 Access Token 수명 15분 동안).
+
+## API
+
+| API | 동작 | 폐기 사유(`RevokeReason`) |
+|---|---|---|
+| `GET /api/account/sessions` | 활성 세션 목록. `current`=지금 요청한 세션 | - |
+| `DELETE /api/account/sessions/{id}` | 특정 기기 로그아웃. 남의 세션·없는 세션은 404 | `session-revoke` |
+| `POST /api/account/sessions/revoke-others` | 현재 세션 외 모두 로그아웃 | `session-revoke-others` |
+| `POST /api/account/sessions/revoke-all` | 전체 로그아웃 + SecurityStamp 갱신 | `session-revoke-all` |
+| `POST /api/admin/users/sessions/revoke-all` | 관리자에 의한 전체 로그아웃 + SecurityStamp 갱신 | `admin-session-revoke-all` |
+
+폐기 사유에는 `rotated`를 쓰지 않는다. 그래야 폐기된 토큰이 다시 들어와도 `refresh.revoked`로만 기록되고 재사용 공격 경보가 울리지 않는다(REG-010).
+
+## 만료 토큰 정리
+
+`RefreshTokenCleanupService`(BackgroundService)가 `RefreshTokens:Cleanup:IntervalMinutes`(기본 60분)마다 만료 후 `RetentionDays`(기본 30일)가 지난 토큰을 `BatchSize`(기본 500)씩 지운다. 기동 30초 뒤 처음 실행한다.
+
+- 회전된 토큰이 남아 있어야 재사용 탐지가 된다. 그래서 폐기 시각이 아니라 **만료 시각** 기준으로 지우고, 세션(family)의 **모든** 토큰이 보존 기간을 넘겨 만료된 경우에만 지운다. 살아 있는 세션의 오래된 회전 토큰은 남긴다(REG-013 항목 참고).
+- 정리 쿼리용으로 `IX_RefreshTokens_ExpiresAt` 인덱스를 둔다(003).
+- 여러 인스턴스가 같은 행을 지우다 동시성 충돌이 나면 그 배치를 다시 조회해 계속한다.
+
+---
+
+# 40. 관리자 보안 강화 (2026-10-02)
+
+35장 우선순위 4를 구현했다.
+
+## 정책 (`Services/AdminAuthorization.cs`)
+
+관리자 API(`AdminController`)는 `[Authorize(Policy = AdminPolicy.Name)]`이다. `AdminMfaHandler`가 요청마다 다음을 확인한다.
+
+1. **Admin 역할을 DB에서 확인한다.** 토큰의 role 클레임은 발급 시점 값이므로 역할을 회수해도 남는다. DB를 보면 회수 즉시 거부된다.
+2. **2차 인증 세션(`amr=mfa`)이어야 한다.** 비밀번호만 아는 공격자는 관리자 API를 쓸 수 없다.
+3. **지금도 2FA가 켜져 있어야 한다.**
+
+거부(403)는 `AdminAuthorizationResultHandler`가 `admin.denied`(`Detail`=`not-admin`/`mfa-required`)로 기록하고, 본문에 `reason`을 담아 응답한다.
+
+## 운영 영향
+
+- **기존 관리자는 2FA를 켜야 한다.** 배포 후 비밀번호만으로 로그인한 관리자는 관리자 API에서 403(`mfa-required`)을 받는다. 배포 전에 관리자 계정의 Authenticator 등록(`/2fa/setup` → `/2fa/enable`)을 안내한다.
+- 관리자 작업에는 사유가 필수다(앞뒤 공백 제외 1~500자).
+- 관리자 API로 자기 계정의 2FA는 초기화할 수 없다(400). self-service API로 비밀번호+TOTP를 확인하고 바꾼다.
+
+## 감사 강화
+
+- `AuditLogs.ActorUserId`(003)에 요청한 사용자를 자동 기록한다. 관리자 작업이면 `UserId`=대상, `ActorUserId`=관리자다.
+- 감사 로그 조회 API(`GET /api/admin/audit-logs`)를 추가했다. 조회 자체도 `admin.audit.read`로 남긴다.
+- 대상 사용자 세션 조회·전체 로그아웃도 기록한다(`admin.sessions.read`, `admin.sessions.revoke-all`).
+
+---
+
+# 41. 메일 발송 (SMTP) (2026-10-02)
+
+35장 우선순위 2를 구현했다. 설정 키는 API README "메일 발송 (SMTP)"에 있다.
+
+## 구조
+
+```text
+API 요청 (register / resend-confirmation / forgot-password)
+   |
+   v
+EmailQueue (메모리 Channel, 최대 10,000건)  ← 요청은 여기서 바로 반환
+   |
+   v
+EmailDispatchService (BackgroundService)
+   |
+   v
+SmtpEmailSender (MailKit) --실패--> RetryDelaysSeconds 간격 재시도 --최종 실패--> 오류 로그 + email.failed
+```
+
+발송기 선택(`Program.cs`, 요청 시점 설정 기준):
+
+| 조건 | 발송기 |
+|---|---|
+| `Email:Smtp:Host` 있음 | `EmailQueue` → SMTP |
+| Development + `Email:PickupDirectory` | 파일 저장 (E2E) |
+| 그 밖 | 로그만 남김. 운영 환경이면 기동 시 "메일이 발송되지 않는다" 경고 |
+
+## 설계 이유
+
+- **계정 존재 여부 노출 방지.** `forgot-password`는 계정이 있을 때만 메일을 보낸다. SMTP 응답을 기다리면 계정이 있을 때만 응답이 느려져 시간 차이로 계정 존재를 알 수 있다. 큐에 넣고 바로 응답해 이 차이를 없앴다.
+- **장애 격리.** SMTP 장애가 회원가입·재설정 API의 500으로 번지지 않는다.
+- **유실 가능성.** 큐는 메모리에만 있어 프로세스가 재시작되면 보내지 못한 메일이 사라진다. 사용자는 재발송 API로 다시 요청할 수 있다. 유실이 허용되지 않으면 DB Outbox 테이블로 바꾼다.
+
+## 보안
+
+- `Email:Smtp:Password`는 환경 변수(`Email__Smtp__Password`)나 Secret Store로만 준다(29장).
+- 서버 인증서 검증을 끄지 않는다. 기본 보안 방식은 STARTTLS다. `None`(평문)은 사내 릴레이나 테스트에만 쓴다.
+- 메일 본문(확인·재설정 토큰)은 로그와 감사 로그에 남기지 않는다. 실패 로그에는 수신자와 제목만 남는다.
+
+## 운영 전 확인
+
+```text
+1. Email:Smtp:* 설정 (Password는 Secret Store)
+2. 테스트 계정으로 register → 확인 메일 수신 → confirm-email
+3. forgot-password → 재설정 메일 수신 → reset-password
+4. SMTP를 일부러 막고 email.failed 감사 로그와 오류 로그 확인
+5. SPF/DKIM/DMARC 등 발신 도메인 설정 확인 (스팸 분류 방지)
+```
 
 ---
 

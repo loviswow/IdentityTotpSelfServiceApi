@@ -3,7 +3,7 @@ Option Explicit
 
 ' 실행 방법
 '   화면 모드 : Vb6TestClient.exe
-'   자동 모드 : Vb6TestClient.exe /auto base=http://localhost:5080 mail=D:\...\mail admin=관리자이메일:비밀번호 out=result.txt
+'   자동 모드 : Vb6TestClient.exe /auto base=http://localhost:5080 mail=D:\...\mail admin=관리자이메일:비밀번호:TOTP키 out=result.txt
 '               전체 시나리오를 실행하고 결과를 out 파일에 쓴 뒤 종료한다. 실패가 있으면 종료 코드 1.
 '   TOTP 확인 : Vb6TestClient.exe /totp key=BASE32KEY [time=유닉스초] out=code.txt
 
@@ -13,11 +13,12 @@ Public Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
 Public gMailDir As String
 Public gAdminEmail As String
 Public gAdminPassword As String
+Public gAdminKey As String
 Public gUi As Boolean
 Private mLog As String
 
 Sub Main()
-    Dim args() As String, i As Long, a As String, mode As String, outFile As String, key As String, t As String, failed As Long
+    Dim args() As String, i As Long, a As String, parts() As String, mode As String, outFile As String, key As String, t As String, failed As Long
     gBaseUrl = "http://localhost:5080"
     args = Split(Trim$(Command$), " ")
     For i = 0 To UBound(args)
@@ -30,8 +31,11 @@ Sub Main()
         If LCase$(Left$(a, 4)) = "key=" Then key = Mid$(a, 5)
         If LCase$(Left$(a, 5)) = "time=" Then t = Mid$(a, 6)
         If LCase$(Left$(a, 6)) = "admin=" Then
-            gAdminEmail = Left$(Mid$(a, 7), InStr(Mid$(a, 7), ":") - 1)
-            gAdminPassword = Mid$(Mid$(a, 7), InStr(Mid$(a, 7), ":") + 1)
+            ' admin=<email>:<password>:<TOTP 키>. 관리자 API는 MFA 세션만 허용하므로 TOTP 키가 필요하다.
+            parts = Split(Mid$(a, 7), ":")
+            gAdminEmail = parts(0)
+            If UBound(parts) >= 1 Then gAdminPassword = parts(1)
+            If UBound(parts) >= 2 Then gAdminKey = parts(2)
         End If
     Next
     If Right$(gBaseUrl, 1) = "/" Then gBaseUrl = Left$(gBaseUrl, Len(gBaseUrl) - 1)

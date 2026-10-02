@@ -1,6 +1,6 @@
 // 헤드리스 Chrome에서 index.html?autorun=1 을 열어 브라우저 안에서 전체 시나리오를 실행하고 결과를 수집한다.
 // 외부 패키지 없이 Chrome DevTools Protocol(WebSocket)만 사용한다. 실패가 있으면 exit code 1.
-// 사용: node run-browser.mjs --url http://localhost:5090 [--admin email:password] [--chrome <chrome.exe>] [--out log.txt]
+// 사용: node run-browser.mjs --url http://localhost:5090 [--admin email:password:totpKey] [--chrome <chrome.exe>] [--out log.txt]
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';

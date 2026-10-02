@@ -29,8 +29,12 @@ Private Function Expect(ByVal name As String, ByVal expected As Long) As Boolean
     Expect = Ok(name, mStatus = expected, "기대 " & expected & ", 실제 " & mStatus & " " & Left$(MaskTokens(mBody), 200))
 End Function
 
-Private Function LoginTokens(ByVal name As String) As Boolean
-    Api "POST", "/api/auth/login", JsonObj("email", mEmail, "password", mPw)
+Private Function LoginTokens(ByVal name As String, Optional ByVal deviceName As String = "") As Boolean
+    If Len(deviceName) > 0 Then
+        Api "POST", "/api/auth/login", JsonObj("email", mEmail, "password", mPw, "deviceName", deviceName)
+    Else
+        Api "POST", "/api/auth/login", JsonObj("email", mEmail, "password", mPw)
+    End If
     If Expect(name, 200) Then
         mAccess = JsonGet(mBody, "accessToken")
         mRefresh = JsonGet(mBody, "refreshToken")
@@ -53,6 +57,25 @@ Private Function Login2Fa(ByVal name As String) As Boolean
         mRefresh = JsonGet(mBody, "refreshToken")
         Login2Fa = True
     End If
+End Function
+
+' 세션 목록(JSON 배열)에서 기기 이름이 deviceName인 세션의 sessionId를 찾는다. 없으면 "".
+' 항목은 {"sessionId":"...","deviceName":"...",...} 순서로 오므로 기기 이름 앞의 가장 가까운 sessionId를 읽는다.
+Private Function SessionIdOf(ByVal json As String, ByVal deviceName As String) As String
+    Dim p As Long, q As Long
+    p = InStr(1, json, """deviceName"":""" & deviceName & """", vbBinaryCompare)
+    If p = 0 Then Exit Function
+    q = InStrRev(json, """sessionId"":""", p, vbBinaryCompare)
+    If q > 0 Then SessionIdOf = Between(Mid$(json, q), """sessionId"":""", """")
+End Function
+
+' 세션 목록에서 현재 세션("current":true) 항목의 기기 이름. 없으면 "".
+Private Function CurrentDevice(ByVal json As String) As String
+    Dim p As Long, q As Long
+    p = InStr(1, json, """current"":true", vbBinaryCompare)
+    If p = 0 Then Exit Function
+    q = InStrRev(json, """deviceName"":""", p, vbBinaryCompare)
+    If q > 0 Then CurrentDevice = Between(Mid$(json, q), """deviceName"":""", """")
 End Function
 
 Private Function WrongCode() As String
@@ -245,16 +268,63 @@ Public Function RunScenario() As Long
     Expect "PWD 재설정 후 기존 Access → 401", 401
     LoginTokens "PWD 새 비밀번호 로그인"
 
-    ' ---------- 관리자 ----------
+    ' ---------- 세션(기기) 관리 ----------
+    Dim pcAt As String, pcRt As String, phAt As String, phRt As String, sid As String
+    If LoginTokens("SESSION PC 로그인", "VB6-PC") Then pcAt = mAccess: pcRt = mRefresh
+    If LoginTokens("SESSION Phone 로그인", "VB6-Phone") Then phAt = mAccess: phRt = mRefresh
+    Api "GET", "/api/account/sessions", , pcAt
+    If Expect("SESSION 세션 목록 → 200", 200) Then
+        sid = SessionIdOf(mBody, "VB6-Phone")
+        Ok "SESSION 두 기기 표시", Len(SessionIdOf(mBody, "VB6-PC")) > 0 And Len(sid) > 0, mBody
+        Ok "SESSION 현재 세션 = VB6-PC", CurrentDevice(mBody) = "VB6-PC", mBody
+        Ok "SESSION 목록에 Refresh Token 없음", InStr(1, mBody, pcRt, vbBinaryCompare) = 0, "Refresh Token 노출"
+    End If
+    Api "DELETE", "/api/account/sessions/" & sid, , pcAt
+    Expect "SESSION 특정 기기 로그아웃 → 204", 204
+    Api "GET", "/api/account/me", , phAt
+    Expect "SESSION 로그아웃한 기기 Access → 401", 401
+    Api "POST", "/api/auth/token/refresh", JsonObj("refreshToken", phRt)
+    Expect "SESSION 로그아웃한 기기 Refresh → 401", 401
+    Api "GET", "/api/account/me", , pcAt
+    Expect "SESSION 현재 기기 Access 유지 → 200", 200
+    Api "DELETE", "/api/account/sessions/no-such-session", , pcAt
+    Expect "SESSION 없는 세션 → 404", 404
+    If LoginTokens("SESSION Tablet 로그인", "VB6-Tablet") Then tAccess = mAccess: tRefresh = mRefresh
+    Api "POST", "/api/account/sessions/revoke-others", , pcAt
+    If Expect("SESSION 다른 기기 모두 로그아웃 → 200", 200) Then Ok "SESSION revokedSessions >= 1", Val(JsonGet(mBody, "revokedSessions")) >= 1, mBody
+    Api "GET", "/api/account/me", , tAccess
+    Expect "SESSION 다른 기기 Access → 401", 401
+    Api "POST", "/api/auth/token/revoke", JsonObj("refreshToken", pcRt)
+    Expect "SESSION 현재 기기 로그아웃 → 204", 204
+    Api "GET", "/api/account/me", , pcAt
+    Expect "SESSION 로그아웃한 세션의 Access → 401", 401
+    If LoginTokens("SESSION 전체 로그아웃용 로그인 A", "VB6-A") Then tAccess = mAccess: tRefresh = mRefresh
+    LoginTokens "SESSION 전체 로그아웃용 로그인 B", "VB6-B"
+    Api "POST", "/api/account/sessions/revoke-all", , tAccess
+    Expect "SESSION 전체 기기 로그아웃 → 204", 204
+    Api "GET", "/api/account/me", , tAccess
+    Expect "SESSION 전체 로그아웃 후 A Access → 401", 401
+    Api "GET", "/api/account/me", , mAccess
+    Expect "SESSION 전체 로그아웃 후 B Access → 401", 401
+    Api "POST", "/api/auth/token/refresh", JsonObj("refreshToken", mRefresh)
+    Expect "SESSION 전체 로그아웃 후 B Refresh → 401", 401
+    LoginTokens "SESSION 전체 로그아웃 후 다시 로그인"
+
+    ' ---------- 관리자 (Admin 역할 + MFA 세션 필수) ----------
     Api "POST", "/api/admin/users/2fa/reset", JsonObj("userId", mUserId, "reason", "test"), mAccess
     Expect "ADMIN 일반 사용자 호출 → 403", 403
-    If Len(gAdminEmail) > 0 Then
-        If EnableTotp("ADMIN 대상 2FA 등록") Then
-            If Login2Fa("ADMIN 대상 사용자 로그인") Then
-                tAccess = mAccess: tRefresh = mRefresh
-                Api "POST", "/api/auth/login", JsonObj("email", gAdminEmail, "password", gAdminPassword)
-                If Expect("ADMIN 관리자 로그인 → 200", 200) Then
-                    adminAt = JsonGet(mBody, "accessToken")
+    If Len(gAdminEmail) > 0 And Len(gAdminKey) > 0 Then
+        Api "POST", "/api/auth/login", JsonObj("email", gAdminEmail, "password", gAdminPassword, "deviceName", "VB6-Admin")
+        If Expect("ADMIN 관리자 로그인 → 200", 200) Then
+            ch = JsonGet(mBody, "challengeToken")
+            Ok "ADMIN 관리자는 2FA 사용(challengeToken)", JsonGet(mBody, "requiresTwoFactor") = "true" And Len(ch) > 0, MaskTokens(mBody)
+            Api "POST", "/api/auth/2fa", JsonObj("challengeToken", ch, "code", Totp(gAdminKey), "deviceName", "VB6-Admin")
+            If Expect("ADMIN 관리자 TOTP 인증 → 200", 200) Then adminAt = JsonGet(mBody, "accessToken")
+        End If
+        If Len(adminAt) > 0 Then
+            If EnableTotp("ADMIN 대상 2FA 등록") Then
+                If Login2Fa("ADMIN 대상 사용자 로그인") Then
+                    tAccess = mAccess: tRefresh = mRefresh
                     Api "POST", "/api/admin/users/2fa/reset", JsonObj("userId", mUserId, "reason", ""), adminAt
                     Expect "ADMIN 사유 없음 → 400", 400
                     Api "POST", "/api/admin/users/2fa/reset", JsonObj("userId", "no-such-user", "reason", "test"), adminAt
@@ -268,9 +338,23 @@ Public Function RunScenario() As Long
                     LoginTokens "ADMIN 초기화 후 대상 로그인(2FA 해제됨)"
                 End If
             End If
+            Api "GET", "/api/admin/audit-logs?eventType=admin.2fa.reset&limit=5&userId=" & mUserId, , adminAt
+            If Expect("ADMIN 감사 로그 조회 → 200", 200) Then Ok "ADMIN 감사 로그에 사유와 수행자(한글은 \uXXXX로 이스케이프됨)", InStr(1, mBody, """detail"":""VB6 E2E ", vbBinaryCompare) > 0 And InStr(1, mBody, """actorUserId"":""", vbBinaryCompare) > 0, mBody
+            Api "GET", "/api/admin/audit-logs?limit=1000", , adminAt
+            Expect "ADMIN 감사 로그 limit 초과 → 400", 400
+            If LoginTokens("ADMIN 대상 세션 준비", "VB6-Target") Then tAccess = mAccess: tRefresh = mRefresh
+            Api "GET", "/api/admin/users/" & mUserId & "/sessions", , adminAt
+            If Expect("ADMIN 대상 세션 조회 → 200", 200) Then Ok "ADMIN 대상 세션 표시", Len(SessionIdOf(mBody, "VB6-Target")) > 0, mBody
+            Api "POST", "/api/admin/users/sessions/revoke-all", JsonObj("userId", mUserId, "reason", "VB6 E2E 침해 대응"), adminAt
+            Expect "ADMIN 대상 전체 로그아웃 → 204", 204
+            Api "GET", "/api/account/me", , tAccess
+            Expect "ADMIN 전체 로그아웃 후 대상 Access → 401", 401
+            Api "POST", "/api/auth/token/refresh", JsonObj("refreshToken", tRefresh)
+            Expect "ADMIN 전체 로그아웃 후 대상 Refresh → 401", 401
+            LoginTokens "ADMIN 전체 로그아웃 후 대상 로그인"
         End If
     Else
-        LogLine "SKIP  ADMIN 관리자 2FA 초기화: 관리자 계정이 주어지지 않음"
+        LogLine "SKIP  ADMIN 관리자 API: 관리자 계정(email:password:totpKey)이 주어지지 않음"
     End If
 
     ' ---------- 계정 잠금 (마지막: 계정이 잠긴다) ----------

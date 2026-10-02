@@ -66,10 +66,9 @@ public class AuthController(
                 true, null, null, jwt.CreateTwoFactorChallenge(user)));
         }
 
-        var access = await jwt.CreateAccessTokenAsync(user);
-        var rt = await refreshTokenService.IssueAsync(user, HttpContext.Connection.RemoteIpAddress?.ToString());
+        var tokens = await IssueTokensAsync(user, request.DeviceName);
         await audit.WriteAsync("login.success", true, user.Id);
-        return Ok(new { requiresTwoFactor=false, accessToken=access.Token, expiresAt=access.ExpiresAt, refreshToken=rt.Raw, refreshTokenExpiresAt=rt.Entity.ExpiresAt });
+        return Ok(tokens);
     }
 
     [HttpPost("2fa")]
@@ -96,10 +95,9 @@ public class AuthController(
         }
 
         await userManager.ResetAccessFailedCountAsync(user);
-        var access = await jwt.CreateAccessTokenAsync(user);
-        var rt = await refreshTokenService.IssueAsync(user, HttpContext.Connection.RemoteIpAddress?.ToString());
+        var tokens = await IssueTokensAsync(user, request.DeviceName);
         await audit.WriteAsync("2fa.success", true, user.Id);
-        return Ok(new { requiresTwoFactor=false, accessToken=access.Token, expiresAt=access.ExpiresAt, refreshToken=rt.Raw, refreshTokenExpiresAt=rt.Entity.ExpiresAt });
+        return Ok(tokens);
     }
 
     [HttpPost("2fa/recovery")]
@@ -124,11 +122,18 @@ public class AuthController(
         }
 
         await userManager.ResetAccessFailedCountAsync(user);
-        var access = await jwt.CreateAccessTokenAsync(user);
-        var rt = await refreshTokenService.IssueAsync(user, HttpContext.Connection.RemoteIpAddress?.ToString());
+        var tokens = await IssueTokensAsync(user, request.DeviceName);
         // 복구 코드 사용은 Authenticator 분실 가능성을 뜻하므로 남은 개수를 함께 기록한다(코드 원문은 기록하지 않는다).
         await audit.WriteAsync("recovery.success", true, user.Id, $"recoveryCodesLeft={await userManager.CountRecoveryCodesAsync(user)}");
-        return Ok(new { requiresTwoFactor=false, accessToken=access.Token, expiresAt=access.ExpiresAt, refreshToken=rt.Raw, refreshTokenExpiresAt=rt.Entity.ExpiresAt });
+        return Ok(tokens);
+    }
+
+    // Refresh Token(=새 세션)을 먼저 만들고, 그 FamilyId를 sid로 담은 Access Token을 발급한다.
+    private async Task<object> IssueTokensAsync(ApplicationUser user, string? deviceName)
+    {
+        var rt = await refreshTokenService.IssueAsync(user, HttpContext.Connection.RemoteIpAddress?.ToString(), deviceName, Request.Headers.UserAgent.ToString());
+        var access = await jwt.CreateAccessTokenAsync(user, rt.Entity.FamilyId);
+        return new { requiresTwoFactor=false, accessToken=access.Token, expiresAt=access.ExpiresAt, refreshToken=rt.Raw, refreshTokenExpiresAt=rt.Entity.ExpiresAt };
     }
 
     private async Task RecordSecondFactorFailureAsync(ApplicationUser user, string eventType)

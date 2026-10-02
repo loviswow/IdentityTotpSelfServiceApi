@@ -7,7 +7,7 @@
   2. 테스트 DB 생성 및 MigrationsSql\NNN_*.sql 적용 (rollback 제외)
   3. API를 Development + Email:PickupDirectory(.e2e\mail)로 실행
   4. Web 테스트 클라이언트 서버(tools\WebTestClient\server.js) 실행
-  5. 관리자 계정 생성 (가입 → 메일 확인 → Admin 역할 부여)
+  5. 관리자 계정 생성 (가입 → 메일 확인 → Admin 역할 부여 → 2FA 활성화. 관리자 API는 MFA 세션 필수)
   6. Web 시나리오(Node) / VB6 시나리오(/auto) 실행
   7. 감사 로그 점검 후 서버 종료
 
@@ -50,6 +50,12 @@ if (-not $sqlcmd) {
 }
 if (-not $sqlcmd) { throw "sqlcmd를 찾을 수 없습니다." }
 $conn = "Server=$SqlServer;Database=$Database;Trusted_Connection=True;TrustServerCertificate=True;MultipleActiveResultSets=true"
+
+# TOTP 코드는 Web 시나리오와 같은 구현(scenario.js의 totp)으로 계산한다.
+function Totp([string]$key) {
+    $scenario = "file:///" + ((Join-Path $webDir "public\scenario.js") -replace '\\', '/')
+    (node --input-type=module -e "import {totp} from '$scenario'; console.log(await totp('$key'))").Trim()
+}
 
 function Sql([string]$query) {
     # -I: QUOTED_IDENTIFIER ON (필터 인덱스가 있는 Identity 테이블에 쓰기 위해 필요)
@@ -113,19 +119,24 @@ try {
     Invoke-RestMethod -Method Post "$api/api/auth/confirm-email" -ContentType "application/json" -Body (@{ userId = $Matches[2]; token = $Matches[1] } | ConvertTo-Json) | Out-Null
     Sql "IF NOT EXISTS(SELECT 1 FROM AspNetRoles WHERE NormalizedName='ADMIN') INSERT AspNetRoles(Id,Name,NormalizedName,ConcurrencyStamp) VALUES(CONVERT(nvarchar(450),NEWID()),'Admin','ADMIN',CONVERT(nvarchar(450),NEWID()));
          INSERT AspNetUserRoles(UserId,RoleId) SELECT u.Id,r.Id FROM AspNetUsers u CROSS JOIN AspNetRoles r WHERE u.NormalizedEmail=UPPER('$adminEmail') AND r.NormalizedName='ADMIN'" | Out-Null
-    Write-Host "  $adminEmail (Admin)"
+    # 관리자 API는 MFA 세션만 허용하므로 관리자도 2FA를 켠다. TOTP 키는 시나리오에 email:password:key로 넘긴다.
+    $at = (Invoke-RestMethod -Method Post "$api/api/auth/login" -ContentType "application/json" -Body (@{ email = $adminEmail; password = $adminPw } | ConvertTo-Json)).accessToken
+    $adminKey = (Invoke-RestMethod -Method Post "$api/api/account/2fa/setup" -Headers @{ Authorization = "Bearer $at" }).sharedKey
+    Invoke-RestMethod -Method Post "$api/api/account/2fa/enable" -Headers @{ Authorization = "Bearer $at" } -ContentType "application/json" -Body (@{ code = (Totp $adminKey) } | ConvertTo-Json) | Out-Null
+    $adminArg = "${adminEmail}:${adminPw}:$adminKey"
+    Write-Host "  $adminEmail (Admin, 2FA)"
 
     $results = [ordered]@{}
     if (-not $SkipWeb) {
         Step "Web 시나리오 (scenario.js, Node 실행)"
         Push-Location $webDir
-        try { node run-scenario.mjs --base "http://localhost:$WebPort" --admin "${adminEmail}:$adminPw" --out (Join-Path $e2e "web-result.json") } finally { Pop-Location }
+        try { node run-scenario.mjs --base "http://localhost:$WebPort" --admin $adminArg --out (Join-Path $e2e "web-result.json") } finally { Pop-Location }
         $results["Web(Node)"] = $LASTEXITCODE
 
         if (Test-Path $Chrome) {
             Step "Web 시나리오 (index.html, 헤드리스 Chrome)"
             Push-Location $webDir
-            try { node run-browser.mjs --url "http://localhost:$WebPort" --admin "${adminEmail}:$adminPw" --chrome $Chrome --out (Join-Path $e2e "browser-result.txt") } finally { Pop-Location }
+            try { node run-browser.mjs --url "http://localhost:$WebPort" --admin $adminArg --chrome $Chrome --out (Join-Path $e2e "browser-result.txt") } finally { Pop-Location }
             $results["Web(Chrome)"] = $LASTEXITCODE
         } else { Write-Host "Chrome이 없어 브라우저 검증을 건너뜁니다: $Chrome" -ForegroundColor Yellow }
     }
@@ -142,7 +153,7 @@ try {
             if ($b -notmatch 'succeeded') { throw "VB6 빌드 실패" }
         }
         $out = Join-Path $e2e "vb6-result.txt"; if (Test-Path $out) { Remove-Item $out }
-        $p = Start-Process $exe -ArgumentList @("/auto", "base=$api", "mail=$mail", "admin=${adminEmail}:$adminPw", "out=$out") -Wait -PassThru
+        $p = Start-Process $exe -ArgumentList @("/auto", "base=$api", "mail=$mail", "admin=$adminArg", "out=$out") -Wait -PassThru
         if (Test-Path $out) { [IO.File]::ReadAllText($out, $cp949) | Write-Host } else { Write-Host "결과 파일 없음" -ForegroundColor Red }
         $results["VB6"] = $p.ExitCode
 
@@ -161,9 +172,7 @@ try {
         Invoke-RestMethod -Method Post "$api/api/auth/confirm-email" -ContentType "application/json" -Body (@{ userId = $Matches[2]; token = $Matches[1] } | ConvertTo-Json) | Out-Null
         $at = (Invoke-RestMethod -Method Post "$api/api/auth/login" -ContentType "application/json" -Body (@{ email = $sEmail; password = $sPw } | ConvertTo-Json)).accessToken
         $key = (Invoke-RestMethod -Method Post "$api/api/account/2fa/setup" -Headers @{ Authorization = "Bearer $at" }).sharedKey
-        $scenario = "file:///" + ((Join-Path $webDir "public\scenario.js") -replace '\\', '/')
-        $code = (node --input-type=module -e "import {totp} from '$scenario'; console.log(await totp('$key'))").Trim()
-        Invoke-RestMethod -Method Post "$api/api/account/2fa/enable" -Headers @{ Authorization = "Bearer $at" } -ContentType "application/json" -Body (@{ code = $code } | ConvertTo-Json) | Out-Null
+        Invoke-RestMethod -Method Post "$api/api/account/2fa/enable" -Headers @{ Authorization = "Bearer $at" } -ContentType "application/json" -Body (@{ code = (Totp $key) } | ConvertTo-Json) | Out-Null
         $out = Join-Path $e2e "vb6sample-result.txt"; if (Test-Path $out) { Remove-Item $out }
         $p = Start-Process $chkExe -ArgumentList @($api, $sEmail, $sPw, $key, $out) -Wait -PassThru
         if (Test-Path $out) { Get-Content $out | Write-Host } else { Write-Host "결과 파일 없음" -ForegroundColor Red }

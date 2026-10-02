@@ -14,5 +14,7 @@
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.3" />
     <!-- Swashbuckle이 끌어오는 2.3.0에 높음 심각도 취약점(GHSA-v5pm-xwqc-g5wc)이 있어 패치 버전을 명시한다. -->
     <PackageReference Include="Microsoft.OpenApi" Version="2.12.2" />
+    <!-- SMTP 발송. System.Net.Mail.SmtpClient는 Microsoft가 신규 개발에 권장하지 않는다. -->
+    <PackageReference Include="MailKit" Version="4.18.1" />
   </ItemGroup>
 </Project>

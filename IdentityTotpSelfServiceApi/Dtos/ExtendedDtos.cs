@@ -6,4 +6,5 @@ public record ResetPasswordRequest(string Email, string Token, string NewPasswor
 public record ConfirmEmailRequest(string UserId, string Token);
 public record ResendConfirmationRequest(string Email);
 public record AdminReset2FaRequest(string UserId, string Reason);
+public record AdminRevokeSessionsRequest(string UserId, string Reason);
 public record TokenPairResponse(string AccessToken, DateTimeOffset AccessTokenExpiresAt, string RefreshToken, DateTimeOffset RefreshTokenExpiresAt);
