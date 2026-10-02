@@ -32,8 +32,9 @@ publish → DB 적용 → API(5080)·Web(5090) 실행까지만 하고 시나리�
 - JWT 서명 키를 `.e2e\jwt-dev.key`에 저장해 재사용합니다. 서버를 다시 띄워도 기존 로그인 토큰이 유지됩니다(E2E 실행은 매번 새 키를 씁니다).
 - 포트가 이미 쓰이고 있으면 시작하지 않고 안내합니다. 끝낼 때는 다음 명령으로 종료합니다.
   ```powershell
-  5080,5090 | % { Get-NetTCPConnection -LocalPort $_ -State Listen -ErrorAction SilentlyContinue } | % { Stop-Process -Id $_.OwningProcess -Force }
+  Get-NetTCPConnection -LocalPort 5080,5090 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | % { Stop-Process -Id $_ -Force }
   ```
+  API는 IPv4와 IPv6 포트를 함께 열어 같은 PID가 두 번 나오므로 `-Unique`로 중복을 뺍니다(빼지 않으면 두 번째 종료에서 "Cannot find a process" 오류가 납니다).
 - 출력을 `| Tee-Object`, `| tail`처럼 파이프로 넘기지 마십시오. 띄운 서버가 파이프를 계속 잡고 있어 명령이 끝나지 않습니다(서버는 정상 실행됨).
 - Claude Code 대화창(`!`, Bash)에서는 `powershell.exe`가 PATH에 없으므로 전체 경로로 실행합니다. 이때도 한글은 UTF-8로 출력됩니다.
   ```

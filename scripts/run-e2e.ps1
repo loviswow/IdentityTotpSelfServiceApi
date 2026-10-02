@@ -13,7 +13,8 @@
 
   -ServeOnly: 1~4(publish, DB 적용, API·Web 서버 실행)만 하고 시나리오 없이 서버를 띄워 둔다.
     메일 폴더를 비우지 않고, JWT 서명 키를 .e2e\jwt-dev.key에 저장해 재사용하므로 다시 띄워도 기존 로그인이 유지된다.
-    끝낼 때는 출력된 PID를 Stop-Process로 종료한다.
+    끝낼 때는 다음 명령으로 종료한다(API는 IPv4/IPv6로 같은 PID가 두 번 나오므로 -Unique).
+      Get-NetTCPConnection -LocalPort 5080,5090 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | % { Stop-Process -Id $_ -Force }
 
   운영 DB에는 절대 사용하지 않는다. 테스트 사용자/감사 로그가 계속 쌓인다.
 
@@ -81,7 +82,7 @@ try {
     $ports = @($ApiPort) + $(if ($SkipWeb) { @() } else { @($WebPort) })
     foreach ($p in $ports) {
         if (Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue) {
-            throw "포트 $p 이(가) 이미 사용 중입니다. 기존 서버를 먼저 종료하십시오(예: Get-NetTCPConnection -LocalPort $p -State Listen | % { Stop-Process -Id `$_.OwningProcess })."
+            throw "포트 $p 이(가) 이미 사용 중입니다. 기존 서버를 먼저 종료하십시오(예: Get-NetTCPConnection -LocalPort $p -State Listen | Select-Object -ExpandProperty OwningProcess -Unique | % { Stop-Process -Id `$_ -Force })."
         }
     }
 
