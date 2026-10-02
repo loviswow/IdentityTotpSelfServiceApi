@@ -20,7 +20,7 @@
 |2FA-12|setup→enable|setup 직후 같은 Access Token으로 enable|200 (REG-009)|O|
 |AUD-04|감사 로그|로그아웃·비밀번호 변경으로 폐기된 토큰으로 Refresh|`refresh.revoked`(사유), `refresh.reuse` 아님 (REG-010)|O|
 |VB6-01|VB6 샘플 모듈|2FA 사용자 ApiLogin → ApiTotp → ApiGet → ApiRefresh → ApiLogout, 실패 경로|11/11 (REG-011)|E2E|
-|E2E-01|Web/VB6|`scripts/run-e2e.ps1` 전체 시나리오(가입~잠금)|Web 44/44, VB6 95/95|E2E|
+|E2E-01|Web/VB6|`scripts/run-e2e.ps1` 전체 시나리오(가입~QR~세션~관리자~잠금)|Web 53/53, VB6 141/141, VB6 샘플 12/12|E2E|
 |AUD-01|감사 로그|로그인·2FA·복구 코드·로그아웃·2FA 해제|이벤트 기록 + Detail에 토큰/Secret/복구 코드 없음|O|
 |AUD-02|감사 로그|복구 코드 재발급·2FA 초기화|이벤트 기록|O|
 |AUD-03|감사 로그|TOTP 5회 실패 후 시도|account.locked 1회 + 2fa.locked/login.locked|O|
@@ -56,8 +56,13 @@
 |MAIL-06|SMTP 설정|`RetryDelaysSeconds` 설정|설정값만 사용(기본값 뒤에 덧붙지 않음)|O|
 |REG-012|감사 로그|512자 초과 User-Agent로 로그인(SQL Server)|200 (이전에는 감사 로그 저장 실패로 500)|O|
 |REG-013|폐기 경쟁|로그아웃·세션 폐기·전체 로그아웃·비밀번호 변경 저장 직전에 같은 토큰이 회전됨|204, 회전으로 생긴 토큰도 401 (이전에는 500 + 아무것도 폐기 안 됨)|O|
+|REG-014|2차 인증|공백 복구 코드 / 공백 TOTP 코드|400, 잠금 실패 횟수 증가 없음 (이전에는 복구 코드 500)|O|
 |SESS-11|만료 토큰 정리|살아 있는 세션의 오래된 회전 토큰|지우지 않음, 재사용 시 `refresh.reuse` + family 폐기|O|
 |MAIL-07|SMTP 영구 오류|수신자 550|재시도 없이 `email.failed`|O|
+|QR-01|등록 QR|setup 후 png/bmp/svg|200, 형식별 시그니처, `Cache-Control: no-store`|O|
+|QR-02|등록 QR|setup 전 / 2FA 활성 후|400 / 409|O|
+|QR-03|등록 QR|토큰 없음 / format=gif|401 / 400|O|
+|QR-04|등록 QR|VB6: bmp 다운로드 → `LoadPicture`, Web: png·bmp|열림 (E2E)|E2E|
 |PWD-01|forgot|존재/미존재 이메일|동일 202 응답|E2E|
 |PWD-02|reset|정상 토큰|204 + 기존 세션 폐기|E2E|
 |RATE-01|auth endpoint|허용량 초과|429|O (`LowRateLimitApiFactory`)|

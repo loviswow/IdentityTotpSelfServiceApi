@@ -25,6 +25,9 @@
   .state { font-family:Consolas, monospace; font-size:12px; display:grid; grid-template-columns:120px 1fr; gap:2px 8px; word-break:break-all; }
   .state b { color:var(--muted); font-weight:500; }
   .hint { color:var(--muted); font-size:12px; margin:6px 0 0; }
+  .qr { margin-top:12px; }
+  /* QR은 다크 모드에서도 흰 바탕이어야 앱이 읽는다(SVG 자체에 흰 배경 포함). */
+  #qr svg { display:block; width:220px; height:220px; max-width:100%; border-radius:6px; }
   #totp { font-size:20px; letter-spacing:.15em; }
   #log { font-family:Consolas, "D2Coding", monospace; font-size:12px; white-space:pre-wrap; word-break:break-all; background:var(--code); border-radius:6px; padding:10px; height:calc(100vh - 170px); min-height:300px; overflow:auto; margin:0; }
   .pass { color:var(--ok); } .fail { color:var(--fail); } .req { color:var(--accent); }
@@ -99,6 +102,10 @@
         <b>Shared key</b><span id="sKey">-</span>
         <b>현재 TOTP</b><span><span id="totp">------</span> <span id="ttl"></span></span>
       </div>
+      <div id="qrBox" class="qr" hidden>
+        <div id="qr" role="img" aria-label="Authenticator 등록 QR 코드"></div>
+        <p class="hint">Google/Microsoft Authenticator에서 <b>QR 코드 스캔</b>으로 등록한 뒤, 앱의 6자리를 "TOTP/복구 코드" 칸에 넣고 <b>2FA Enable</b>을 누르십시오.<br>QR에는 TOTP Secret이 들어 있으므로 다른 사람에게 보이지 않게 하십시오.</p>
+      </div>
     </section>
     <section>
       <h2>전체 시나리오</h2>
@@ -120,10 +127,11 @@
 </main>
 <script type="module">
 import { createApi, totp, runScenario } from './scenario.js';
+import qrcode from './vendor/qrcode.js'; // qrcode-generator 2.0.4 (MIT, Kazuhiko Arase). 외부 CDN 없이 동작하도록 저장소에 포함
 
 const api = createApi('');
 const $ = (id) => document.getElementById(id);
-const st = { access: '', refresh: '', challenge: '', key: '' };
+const st = { access: '', refresh: '', challenge: '', key: '', uri: '' };
 const mask = (t) => (t ? t.slice(0, 8) + '…' : '-');
 const logEl = $('log');
 
@@ -144,6 +152,19 @@ function render() {
   $('sRefresh').textContent = mask(st.refresh);
   $('sChallenge').textContent = mask(st.challenge);
   $('sKey').textContent = st.key || '-';
+  renderQr();
+}
+// 2FA Setup 응답의 authenticatorUri(otpauth://...)를 QR로 그린다. 서버는 QR 이미지를 만들지 않으므로 클라이언트가 그린다.
+let qrUri = null;
+function renderQr() {
+  if (st.uri === qrUri) return;
+  qrUri = st.uri;
+  $('qrBox').hidden = !st.uri;
+  if (!st.uri) { $('qr').replaceChildren(); return; }
+  const qr = qrcode(0, 'M');
+  qr.addData(st.uri);
+  qr.make();
+  $('qr').innerHTML = qr.createSvgTag({ cellSize: 4, margin: 4, scalable: true });
 }
 function keep(json) {
   if (!json) return;
@@ -151,6 +172,8 @@ function keep(json) {
   if (json.refreshToken) st.refresh = json.refreshToken;
   if (json.challengeToken) st.challenge = json.challengeToken;
   if (json.sharedKey) st.key = json.sharedKey;
+  if (json.authenticatorUri) st.uri = json.authenticatorUri;
+  if (json.isTwoFactorEnabled === true) st.uri = ''; // 등록이 끝나면 QR(Secret)을 화면에서 지운다
   if (json.id) $('target').value = json.id;
   render();
 }

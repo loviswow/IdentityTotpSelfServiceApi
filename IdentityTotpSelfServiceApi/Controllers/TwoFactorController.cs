@@ -6,6 +6,7 @@ using IdentityTotpSelfServiceApi.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using QRCoder;
 
 namespace IdentityTotpSelfServiceApi.Controllers;
 
@@ -56,15 +57,42 @@ public class TwoFactorController(
         if (string.IsNullOrWhiteSpace(key))
             return Problem("Unable to create authenticator key.");
 
-        var issuer = config["Totp:Issuer"] ?? "SelfService";
-        var account = user.Email ?? user.UserName ?? user.Id;
-        var uri = GenerateOtpAuthUri(issuer, account, key);
+        var uri = AuthenticatorUri(user, key);
 
-        // QR 이미지는 Identity 내장 기능이 아니다.
-        // 클라이언트는 AuthenticatorUri를 QR로 렌더링하거나 SharedKey를 수동 입력한다.
+        // 클라이언트는 AuthenticatorUri를 QR로 렌더링하거나(/qr로 이미지를 받아도 된다) SharedKey를 수동 입력한다.
         // SharedKey는 TOTP Secret이므로 감사 로그에 남기지 않는다.
         await audit.WriteAsync("2fa.setup", true, user.Id);
         return Ok(new TwoFactorSetupResponse(key, uri, false));
+    }
+
+    // /setup으로 만든 등록 정보(AuthenticatorUri)를 QR 이미지로 돌려준다. VB6처럼 QR을 직접 그리기 어려운 클라이언트용.
+    // format: png(기본) / bmp(VB6 LoadPicture용) / svg. QR에는 TOTP Secret이 들어 있으므로 캐시하지 않게 하고,
+    // 2FA가 이미 켜진 뒤에는 주지 않는다(키를 다시 노출하지 않는다).
+    [HttpGet("qr")]
+    public async Task<IActionResult> Qr([FromQuery] string? format = "png")
+    {
+        var user = await CurrentUser();
+        if (user is null) return Unauthorized();
+        if (user.TwoFactorEnabled)
+            return Conflict(new { message = "2FA is already enabled." });
+
+        var key = await userManager.GetAuthenticatorKeyAsync(user);
+        if (string.IsNullOrWhiteSpace(key))
+            return BadRequest(new { message = "Run /setup first." });
+
+        var fmt = (format ?? "png").Trim().ToLowerInvariant();
+        if (fmt is not ("png" or "bmp" or "svg"))
+            return BadRequest(new { message = "format must be png, bmp or svg." });
+
+        using var data = QRCodeGenerator.GenerateQrCode(AuthenticatorUri(user, key), QRCodeGenerator.ECCLevel.M);
+        Response.Headers.CacheControl = "no-store";
+        Response.Headers.Pragma = "no-cache";
+        return fmt switch
+        {
+            "bmp" => File(new BitmapByteQRCode(data).GetGraphic(6), "image/bmp"),
+            "svg" => File(System.Text.Encoding.UTF8.GetBytes(new SvgQRCode(data).GetGraphic(6)), "image/svg+xml"),
+            _ => File(new PngByteQRCode(data).GetGraphic(6), "image/png")
+        };
     }
 
     // Authenticator 앱의 첫 TOTP를 검증한 뒤에만 2FA를 활성화한다.
@@ -207,6 +235,9 @@ public class TwoFactorController(
         var id = User.FindFirstValue(ClaimTypes.NameIdentifier);
         return id is null ? null : await userManager.FindByIdAsync(id);
     }
+
+    private string AuthenticatorUri(ApplicationUser user, string key)
+        => GenerateOtpAuthUri(config["Totp:Issuer"] ?? "SelfService", user.Email ?? user.UserName ?? user.Id, key);
 
     private string GenerateOtpAuthUri(string issuer, string account, string key)
     {

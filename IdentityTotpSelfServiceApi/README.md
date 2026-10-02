@@ -8,8 +8,8 @@ ASP.NET Core Identity의 내장 Authenticator Token Provider를 사용하는 TOT
 
 > **검증 상태 (2026-10-02, 로컬):** .NET 10 SDK와 SQL Server 2022 Express에서 다음을 확인했습니다.
 > - Release 빌드
-> - xUnit 58/58 (InMemory와 SQL Server)
-> - E2E: Web 52/52(Node·Chrome), VB6 139/139, VB6 샘플 12/12
+> - xUnit 63/63 (InMemory와 SQL Server)
+> - E2E: Web 53/53(Node·Chrome), VB6 141/141, VB6 샘플 12/12
 >
 > SMTP는 테스트 SMTP 서버로 검증했고, 운영 SMTP 서버로 실제 수신은 확인하지 않았습니다. 실제 Authenticator 기기와 운영 HTTPS/프록시도 아직 검증하지 않았습니다. 이관 문서 32장을 참고하십시오.
 
@@ -139,6 +139,7 @@ Authenticator 기기를 쓸 수 없으면 복구 코드로 로그인합니다. �
 | POST | `/api/account/change-password` | `currentPassword`, `newPassword` | 비밀번호 변경. 기존 Access/Refresh Token 모두 무효화 |
 | GET | `/api/account/2fa/status` | - | 2FA 사용 여부, 남은 복구 코드 수 |
 | POST | `/api/account/2fa/setup` | - | `sharedKey`, `authenticatorUri` 반환 |
+| GET | `/api/account/2fa/qr?format=png\|bmp\|svg` | - | setup한 `authenticatorUri`의 QR 이미지(기본 png, VB6 `LoadPicture`용 bmp). setup 전 400, 2FA 활성 후 409. `Cache-Control: no-store` |
 | POST | `/api/account/2fa/enable` | `code` | TOTP 확인 후 2FA 활성화, 복구 코드 10개 반환. 기존 Access/Refresh Token 모두 무효화 |
 | POST | `/api/account/2fa/disable` | `password`, `code` | 2FA 비활성화. 기존 Access/Refresh Token 모두 무효화 |
 | POST | `/api/account/2fa/reset` | `password`, `code` | Authenticator 기기 변경. 기존 Access/Refresh Token 모두 무효화. 이후 setup → enable 순서로 다시 등록 |
@@ -146,7 +147,7 @@ Authenticator 기기를 쓸 수 없으면 복구 코드로 로그인합니다. �
 
 ### Authenticator 등록 순서
 
-1. `POST /api/account/2fa/setup`을 호출합니다. 클라이언트는 `authenticatorUri`를 QR 코드로 보여 주거나 `sharedKey`를 직접 입력하게 합니다. 서버는 QR 이미지를 만들지 않습니다.
+1. `POST /api/account/2fa/setup`을 호출합니다. 클라이언트는 `authenticatorUri`를 QR 코드로 보여 주거나 `sharedKey`를 직접 입력하게 합니다. QR을 직접 그리기 어려우면 `GET /api/account/2fa/qr`로 이미지를 받아 표시합니다(VB6는 `?format=bmp`를 임시 파일로 받아 `LoadPicture`, 표시 후 파일 삭제). QR에는 TOTP Secret이 들어 있으므로 등록이 끝나면 화면에서 지웁니다.
 2. 앱에 표시된 6자리 코드로 `POST /api/account/2fa/enable`을 호출합니다.
    ```json
    { "code": "123456" }

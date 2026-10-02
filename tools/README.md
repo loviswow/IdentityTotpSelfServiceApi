@@ -46,11 +46,15 @@ node run-browser.mjs  --url  http://localhost:5090 --admin "admin@e2e.local:Admi
 | 파일 | 역할 |
 |---|---|
 | `server.js` | 외부 패키지가 필요 없는 개발 서버입니다. 정적 파일 제공, `/api` 프록시(같은 출처라 API에 CORS 설정 불필요), 테스트 메일 조회(`/dev/mail`)를 맡습니다. |
-| `public/index.html` | API별 버튼, 현재 토큰·TOTP 상태, 전체 시나리오 실행 버튼이 있는 화면입니다. `?autorun=1`로 열면 시나리오를 바로 실행합니다. |
+| `public/index.html` | API별 버튼, 현재 토큰·TOTP 상태, 전체 시나리오 실행 버튼이 있는 화면입니다. `?autorun=1`로 열면 시나리오를 바로 실행합니다. **2FA Setup**을 누르면 `authenticatorUri`를 QR 코드로 보여 주므로 휴대폰 Authenticator 앱으로 스캔해 등록할 수 있습니다. QR은 **2FA Enable**이 성공하면 화면에서 지웁니다(TOTP Secret 포함). |
+| `public/vendor/qrcode.js` | QR 생성 라이브러리 [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 2.0.4 (MIT, Kazuhiko Arase)의 ESM 빌드를 그대로 넣었습니다. 외부 CDN 없이 오프라인으로 동작합니다. |
 | `public/scenario.js` | 시나리오 본체입니다. 브라우저와 Node가 같은 코드를 씁니다. TOTP는 WebCrypto HMAC-SHA1로 계산합니다. |
 
 ### VB6 (`Vb6TestClient/`)
 - **화면 모드:** `Vb6TestClient.exe`를 실행합니다. 버튼으로 API를 하나씩 호출하거나 전체 시나리오를 실행합니다.
+  - **메일 폴더**는 비어 있으면 저장소의 `.e2e\mail`을 자동으로 찾습니다(실행 파일 위치 기준). 그래도 없으면 전체 시나리오는 시작하지 않고 안내합니다.
+  - **2FA Setup**을 누르면 서버의 등록 QR(`/api/account/2fa/qr?format=bmp`)을 받아 로그 오른쪽에 보여 줍니다. Authenticator 앱으로 스캔해 등록하고, **2FA Enable**이 성공하면 QR은 사라집니다. 임시 BMP 파일은 표시 직후 지웁니다.
+  - 2FA 사용자는 **로그인** 후 5분 안에 **TOTP 인증**을 누릅니다. challenge 없이 누르면 안내 메시지가 나옵니다.
 - **자동 모드:** 아래처럼 실행합니다. 실패가 있으면 종료 코드 1입니다.
   ```
   Vb6TestClient.exe /auto base=http://localhost:5080 mail=<메일폴더> admin=<email>:<pw>:<관리자 TOTP 키> out=result.txt

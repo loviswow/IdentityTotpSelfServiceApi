@@ -87,6 +87,8 @@ Private mRefresh As String
 Private mChallenge As String
 Private mKey As String
 Private mTop As Long
+Private mQr As Object                       ' 등록 QR(VB.Image, 실행 중 생성)
+Private Const QR_SIZE As Long = 3300        ' QR 표시 크기(twip)
 
 Private Sub Form_Load()
     Dim labels As Variant, caps As Variant, i As Integer
@@ -124,11 +126,55 @@ Private Sub Form_Load()
     mTop = mTop + ((UBound(caps) \ 6) + 1) * 460 + 80
     AppendLog "API별 버튼으로 하나씩 호출하거나 [전체 시나리오 실행]으로 전체 흐름을 검증합니다."
     AppendLog "메일 폴더는 API를 Development + Email:PickupDirectory로 실행했을 때 확인/재설정 메일이 저장되는 폴더입니다."
+    If Len(gMailDir) = 0 Then AppendLog "※ 메일 폴더를 찾지 못했습니다. [메일 폴더] 칸에 API의 Email:PickupDirectory 폴더를 입력하십시오."
+
+    ' 2FA Setup 후 Authenticator 등록 QR을 로그 오른쪽에 보여 준다(서버 /api/account/2fa/qr?format=bmp).
+    Set mQr = Controls.Add("VB.Image", "imgQr")
+    mQr.Stretch = True
+    mQr.BorderStyle = 1
+    mQr.Visible = False
 End Sub
 
 Private Sub Form_Resize()
+    Dim w As Long
     If Me.WindowState = vbMinimized Then Exit Sub
-    If Me.ScaleHeight - mTop - 120 > 600 Then txtLog.Move 120, mTop, Me.ScaleWidth - 240, Me.ScaleHeight - mTop - 120
+    If Me.ScaleHeight - mTop - 120 <= 600 Then Exit Sub
+    w = Me.ScaleWidth - 240
+    If Not mQr Is Nothing Then
+        If mQr.Visible Then
+            mQr.Move Me.ScaleWidth - 120 - QR_SIZE, mTop, QR_SIZE, QR_SIZE
+            w = w - QR_SIZE - 120
+        End If
+    End If
+    txtLog.Move 120, mTop, w, Me.ScaleHeight - mTop - 120
+End Sub
+
+' 등록 QR을 받아 화면에 표시한다. QR에는 TOTP Secret이 들어 있으므로 임시 파일은 읽은 즉시 지운다.
+Private Sub ShowQr()
+    Dim f As String, st As Long
+    f = Environ$("TEMP") & "\totp-qr-" & Hex$(Int(Rnd * 2147483647#)) & ".bmp"
+    If HttpGetFile("/api/account/2fa/qr?format=bmp", mAccess, f, st) Then
+        Set mQr.Picture = LoadPicture(f)
+        mQr.Visible = True
+        AppendLog "Authenticator 앱에서 [QR 코드 스캔]으로 오른쪽 QR을 등록한 뒤, 앱의 6자리를 [TOTP/복구 코드]에 넣고 [2FA Enable]을 누르십시오."
+    Else
+        AppendLog "QR 이미지를 받지 못했습니다(HTTP " & st & "). 수동 키로 등록하십시오."
+    End If
+    If Len(Dir$(f)) > 0 Then Kill f
+    Form_Resize
+End Sub
+
+' 서버가 이 사용자의 토큰을 모두 폐기하는 작업(2FA 해제·초기화, 비밀번호 변경) 뒤에 화면의 토큰·키·QR을 지운다.
+Private Sub ClearSession(ByVal what As String)
+    mAccess = "": mRefresh = "": mChallenge = "": mKey = ""
+    HideQr
+    AppendLog what & " 보안을 위해 기존 토큰이 모두 폐기되었으므로 [로그인]부터 다시 하십시오."
+End Sub
+
+Private Sub HideQr()
+    Set mQr.Picture = Nothing
+    mQr.Visible = False
+    Form_Resize
 End Sub
 
 Public Sub AppendLog(ByVal s As String)
@@ -168,9 +214,16 @@ Private Sub cmdApi_Click(Index As Integer)
     Case 2
         body = HttpCall("POST", "/api/auth/resend-confirmation", JsonObj("email", e), "", st)
     Case 3
-        body = HttpCall("POST", "/api/auth/login", JsonObj("email", e, "password", txtF(F_PW).Text), "", st)
+        mChallenge = ""   ' 이전 로그인의 challenge를 다시 쓰지 않는다
+        body = HttpCall("POST", "/api/auth/login", JsonObj("email", e, "password", txtF(F_PW).Text, "deviceName", "VB6 테스트 화면"), "", st)
+        If st = 200 And JsonGet(body, "requiresTwoFactor") = "true" Then AppendLog "2FA 사용자입니다. 앱의 6자리를 [TOTP/복구 코드]에 넣고 5분 안에 [TOTP 인증]을 누르십시오."
     Case 4
-        body = HttpCall("POST", "/api/auth/2fa", JsonObj("challengeToken", mChallenge, "code", Code()), "", st)
+        If Len(mChallenge) = 0 Then
+            AppendLog "challenge가 없습니다. 2FA를 켠 뒤에는 먼저 [로그인]을 눌러 challengeToken을 받으십시오."
+            ok = False
+        Else
+            body = HttpCall("POST", "/api/auth/2fa", JsonObj("challengeToken", mChallenge, "code", Code(), "deviceName", "VB6 테스트 화면"), "", st)
+        End If
     Case 5
         body = HttpCall("POST", "/api/auth/2fa/recovery", JsonObj("challengeToken", mChallenge, "recoveryCode", Trim$(txtF(F_CODE).Text)), "", st)
     Case 6
@@ -185,19 +238,26 @@ Private Sub cmdApi_Click(Index As Integer)
         body = HttpCall("GET", "/api/account/2fa/status", "", mAccess, st)
     Case 10
         body = HttpCall("POST", "/api/account/2fa/setup", "", mAccess, st)
-        If st = 200 Then mKey = JsonGet(body, "sharedKey"): AppendLog "Authenticator 앱에 수동 키 입력: " & mKey
+        If st = 200 Then mKey = JsonGet(body, "sharedKey"): AppendLog "Authenticator 앱에 수동 키 입력: " & mKey: ShowQr
     Case 11
         body = HttpCall("POST", "/api/account/2fa/enable", JsonObj("code", Code()), mAccess, st)
-        If st = 200 Then AppendLog "2FA가 활성화되어 기존 토큰이 폐기되었습니다. 다시 로그인 → TOTP 인증 하십시오."
+        If st = 200 Then
+            ' 활성화되면 기존 토큰은 서버에서 폐기되고, QR(Secret)은 더 필요 없다.
+            mAccess = "": mRefresh = "": mChallenge = ""
+            HideQr
+            AppendLog "2FA가 활성화되어 기존 토큰이 폐기되었습니다. 복구 코드를 보관한 뒤 [로그인] → [TOTP 인증] 하십시오."
+        End If
     Case 12
         body = HttpCall("POST", "/api/account/2fa/disable", JsonObj("password", txtF(F_PW).Text, "code", Code()), mAccess, st)
+        If st = 204 Then ClearSession "2FA를 해제했습니다."
     Case 13
         body = HttpCall("POST", "/api/account/2fa/reset", JsonObj("password", txtF(F_PW).Text, "code", Code()), mAccess, st)
+        If st = 200 Then ClearSession "Authenticator를 초기화했습니다. 다시 로그인한 뒤 [2FA Setup] → [2FA Enable]로 새로 등록하십시오."
     Case 14
         body = HttpCall("POST", "/api/account/2fa/recovery-codes/regenerate", JsonObj("code", Code()), mAccess, st)
     Case 15
         body = HttpCall("POST", "/api/account/change-password", JsonObj("currentPassword", txtF(F_PW).Text, "newPassword", txtF(F_NEWPW).Text), mAccess, st)
-        If st = 204 Then txtF(F_PW).Text = txtF(F_NEWPW).Text: AppendLog "비밀번호를 바꿨습니다. 기존 토큰은 폐기되었습니다."
+        If st = 204 Then txtF(F_PW).Text = txtF(F_NEWPW).Text: ClearSession "비밀번호를 바꿨습니다."
     Case 16
         body = HttpCall("POST", "/api/auth/forgot-password", JsonObj("email", e), "", st)
     Case 17
@@ -221,6 +281,14 @@ Private Sub cmdApi_Click(Index As Integer)
     If ok Then
         SaveTokens body
         AppendLog "[" & cmdApi(Index).Caption & "] " & st & " " & MaskTokens(body)
+        ' 상태 코드만으로는 이유를 알기 어려운 경우 다음 행동을 안내한다.
+        If st = -1 Then
+            AppendLog "  → API 서버(" & gBaseUrl & ")가 실행 중인지 확인하십시오."
+        ElseIf st = 401 And Index >= 8 And Index <> 16 And Index <> 17 Then
+            AppendLog "  → Access Token이 없거나 더 이상 유효하지 않습니다(서버 재시작, 2FA·비밀번호 변경, 로그아웃, 만료 등). [로그인]부터 다시 하십시오."
+        ElseIf st = 401 And Index = 4 Then
+            AppendLog "  → 코드가 틀렸거나 challenge가 만료(5분)되었습니다. 앱의 현재 6자리로 다시 시도하거나 [로그인]부터 다시 하십시오."
+        End If
     End If
     Screen.MousePointer = vbDefault
     Exit Sub

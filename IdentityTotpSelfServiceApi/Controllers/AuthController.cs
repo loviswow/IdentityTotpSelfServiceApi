@@ -77,6 +77,10 @@ public class AuthController(
         var user = await challengeService.ValidateAsync(request.ChallengeToken);
         if (user is null) return Unauthorized();
 
+        // 빈 코드는 입력 누락이므로 실패 횟수에 넣지 않고 400으로 돌려준다(REG-014).
+        if (string.IsNullOrWhiteSpace(request.Code))
+            return BadRequest(new { message = "Authenticator code is required." });
+
         // 2차 인증 실패도 로그인 실패와 같은 lockout 카운트를 사용한다(REG-006).
         if (await userManager.IsLockedOutAsync(user))
         {
@@ -105,6 +109,10 @@ public class AuthController(
     {
         var user = await challengeService.ValidateAsync(request.ChallengeToken);
         if (user is null) return Unauthorized();
+
+        // 공백 코드를 그대로 넘기면 Identity가 ArgumentException을 던져 500이 된다(REG-014).
+        if (string.IsNullOrWhiteSpace(request.RecoveryCode))
+            return BadRequest(new { message = "Recovery code is required." });
 
         if (await userManager.IsLockedOutAsync(user))
         {

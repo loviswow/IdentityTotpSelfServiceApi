@@ -168,6 +168,7 @@ Recovery Code는 사용자에게 한 번 표시하고 안전한 장소에 별도
 | POST | `/api/account/change-password` | 비밀번호 변경 |
 | GET | `/api/account/2fa/status` | 2FA 상태 |
 | POST | `/api/account/2fa/setup` | Authenticator Secret 생성 |
+| GET | `/api/account/2fa/qr` | 등록 QR 이미지(`format`=png/bmp/svg). setup 전 400, 활성 후 409, 캐시 금지 |
 | POST | `/api/account/2fa/enable` | TOTP 확인 후 2FA 활성화 |
 | POST | `/api/account/2fa/disable` | 2FA 비활성화 |
 | POST | `/api/account/2fa/reset` | Authenticator 재등록 |
@@ -869,6 +870,24 @@ API는 500을 반환하고, 저장이 원자적이라 **아무 토큰도 폐기�
 
 ---
 
+## REG-014 빈 복구 코드로 로그인하면 500
+
+문제:
+
+`/api/auth/2fa/recovery`에 공백만 있는 `recoveryCode`를 보내면, `Trim()` 후 빈 문자열이 `RedeemTwoFactorRecoveryCodeAsync`로 넘어가 `ArgumentException`이 발생했다. `/api/auth/2fa`의 빈 TOTP 코드는 500은 아니었지만, 틀린 코드로 처리되어 잠금 실패 횟수가 올라갔다.
+
+결과:
+
+복구 코드 로그인이 500(개발 환경에서는 스택 트레이스 노출)이 되었다. v4 원본부터 있던 결함으로, VB6 테스트 화면에서 복구 코드 칸을 비운 채 버튼을 눌러 발견했다(2026-10-02).
+
+개선:
+
+두 API 모두 challenge 검증 직후 빈 코드를 400으로 돌려준다. 입력 누락은 잠금 실패 횟수에 넣지 않는다.
+
+회귀 테스트: `RegressionTests.SecondFactor_BlankCode_IsRejectedWithoutServerError`(recovery / 2fa). 수정 전 실패(500 / 401), 수정 후 통과.
+
+---
+
 ## 2026-10-02 기능 추가 중 테스트 변경과 발견 사항
 
 - `RegressionTests.AdminReset2Fa_Disables2Fa`: 관리자 API가 MFA 세션을 요구하게 되었으므로(40장), 관리자가 2FA를 켜고 TOTP로 로그인하도록 준비 단계만 바꿨다. 검증 내용(Assert)은 그대로다.
@@ -1160,12 +1179,12 @@ TOTP는 시간 기반 인증 방식이므로 서버 시간이 정확해야 한�
 |---|---|
 | SQL Migration `003` 적용 / 재적용 / rollback / rollback 재실행 / 재적용 | 성공 |
 | `dotnet build -c Release` | 경고 0, 오류 0. `dotnet list package --vulnerable` 취약 패키지 없음(MailKit 4.18.1 추가) |
-| xUnit (InMemory, 반복 실행) | 58/58 통과 |
-| xUnit (SQL Server, 반복 실행) | 58/58 통과 |
-| REG-012, REG-013 재현 | 수정 전 코드로 실패(REG-012는 SQL Server), 수정 후 통과 |
+| xUnit (InMemory, 반복 실행) | 63/63 통과 |
+| xUnit (SQL Server, 반복 실행) | 63/63 통과 |
+| REG-012, REG-013, REG-014 재현 | 수정 전 코드로 실패(REG-012는 SQL Server), 수정 후 통과 |
 | SMTP | MailKit으로 테스트 SMTP 서버(xUnit 내장)에 실제 SMTP 대화(EHLO/AUTH PLAIN/MAIL/RCPT/DATA)로 전달. 일시 장애 재시도, 서버 다운 시 API 무영향과 `email.failed` 기록 |
-| E2E Web (Node / 헤드리스 Chrome) | 각 52/52 통과 (세션 5단계, 관리자 MFA 로그인·감사 조회·세션 관리 포함) |
-| E2E VB6 (`Vb6TestClient.exe`) | 139/139 통과 |
+| E2E Web (Node / 헤드리스 Chrome) | 각 53/53 통과 (세션 5단계, 관리자 MFA 로그인·감사 조회·세션 관리, 등록 QR 포함) |
+| E2E VB6 (`Vb6TestClient.exe`) | 141/141 통과 (등록 QR BMP 다운로드·LoadPicture 포함) |
 | VB6 샘플 모듈 (`tools/Vb6SampleCheck`) | 12/12 통과 (deviceName → 세션 목록 표시 포함) |
 | 감사 로그 | 새 이벤트(`session.*`, `admin.*`) 기록, `Detail`에 토큰 원문 없음 |
 

@@ -50,6 +50,8 @@ export function createApi(base) {
     changePassword: (at, currentPassword, newPassword) => call('POST', '/api/account/change-password', { currentPassword, newPassword }, at),
     status2fa: (at) => call('GET', '/api/account/2fa/status', undefined, at),
     setup2fa: (at) => call('POST', '/api/account/2fa/setup', undefined, at),
+    // 등록 QR 이미지. 본문 대신 상태·Content-Type·캐시 헤더만 확인한다.
+    qr2fa: async (at, format = 'png') => { const r = await fetch(base + '/api/account/2fa/qr?format=' + format, { headers: { Authorization: `Bearer ${at}` } }); return { status: r.status, type: r.headers.get('content-type'), cache: r.headers.get('cache-control'), size: (await r.arrayBuffer()).byteLength }; },
     enable2fa: (at, code) => call('POST', '/api/account/2fa/enable', { code }, at),
     disable2fa: (at, password, code) => call('POST', '/api/account/2fa/disable', { password, code }, at),
     reset2fa: (at, password, code) => call('POST', '/api/account/2fa/reset', { password, code }, at),
@@ -165,6 +167,13 @@ export async function runScenario({ base, adminEmail, adminPassword, adminTotpKe
     const j = expect(await api.setup2fa(s.t.accessToken), 200, 'setup');
     check(j.sharedKey && j.authenticatorUri?.startsWith('otpauth://totp/'), 'sharedKey/authenticatorUri가 필요합니다');
     s.key = j.sharedKey;
+  });
+  await step('2FA 등록 QR 이미지(PNG·BMP) → 200, 캐시 금지', async () => {
+    for (const [fmt, type] of [['png', 'image/png'], ['bmp', 'image/bmp']]) {
+      const r = await api.qr2fa(s.t.accessToken, fmt);
+      check(r.status === 200 && r.type === type && r.size > 100, `${fmt}: ${JSON.stringify(r)}`);
+      check((r.cache ?? '').includes('no-store'), `캐시 금지 헤더가 없습니다: ${r.cache}`);
+    }
   });
   await step('2FA enable 잘못된 코드 → 400', async () => expect(await api.enable2fa(s.t.accessToken, await wrong()), 400, 'enable 오류'));
   await step('2FA enable 정상 → 복구 코드 10개', async () => {

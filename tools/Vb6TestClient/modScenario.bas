@@ -51,7 +51,7 @@ Private Function Login2Fa(ByVal name As String) As Boolean
     Dim ch As String
     ch = Challenge()
     If Not Ok(name & " - challengeToken 발급", Len(ch) > 0, "상태 " & mStatus & " " & MaskTokens(mBody)) Then Exit Function
-    Api "POST", "/api/auth/2fa", JsonObj("challengeToken", ch, "code", Totp(mKey))
+    Api "POST", "/api/auth/2fa", JsonObj("challengeToken", ch, "code", SafeTotp(mKey))
     If Expect(name & " - TOTP 2차 인증", 200) Then
         mAccess = JsonGet(mBody, "accessToken")
         mRefresh = JsonGet(mBody, "refreshToken")
@@ -78,8 +78,13 @@ Private Function CurrentDevice(ByVal json As String) As String
     If q > 0 Then CurrentDevice = Between(Mid$(json, q), """deviceName"":""", """")
 End Function
 
+' 키가 비어 있으면(Setup 실패 등) TOTP 계산이 오류로 시나리오 전체를 멈추므로, 틀린 코드를 돌려 그 단계만 실패하게 한다.
+Private Function SafeTotp(ByVal key As String) As String
+    If Len(key) = 0 Then SafeTotp = "000000" Else SafeTotp = Totp(key)
+End Function
+
 Private Function WrongCode() As String
-    If Totp(mKey) = "000000" Then WrongCode = "111111" Else WrongCode = "000000"
+    If SafeTotp(mKey) = "000000" Then WrongCode = "111111" Else WrongCode = "000000"
 End Function
 
 Private Function EnableTotp(ByVal name As String) As Boolean
@@ -87,7 +92,7 @@ Private Function EnableTotp(ByVal name As String) As Boolean
     Api "POST", "/api/account/2fa/setup", , mAccess
     If Not Expect(name & " - setup", 200) Then Exit Function
     mKey = JsonGet(mBody, "sharedKey")
-    Api "POST", "/api/account/2fa/enable", JsonObj("code", Totp(mKey)), mAccess
+    Api "POST", "/api/account/2fa/enable", JsonObj("code", SafeTotp(mKey)), mAccess
     If Expect(name & " - enable (VB6 TOTP 계산)", 200) Then
         For i = 0 To 9
             mCodes(i) = JsonArrayItem(mBody, "recoveryCodes", i)
@@ -98,9 +103,16 @@ End Function
 
 ' 실패 개수를 돌려준다.
 Public Function RunScenario() As Long
-    Dim info As String, ch As String, oldAt As String, oldRt As String, tAccess As String, tRefresh As String, adminAt As String, tok As String, npw As String, i As Long
+    Dim qrFile As String, info As String, ch As String, oldAt As String, oldRt As String, tAccess As String, tRefresh As String, adminAt As String, tok As String, npw As String, i As Long
 
     mPass = 0: mFail = 0
+    ' 확인·재설정 메일을 읽어야 하므로 메일 폴더가 없으면 시작하지 않는다(없으면 이메일 확인부터 줄줄이 실패한다).
+    If Not FolderExists(gMailDir) Then
+        LogLine "FAIL  메일 폴더가 없습니다: '" & gMailDir & "'"
+        LogLine "      API의 Email:PickupDirectory 폴더(예: 저장소\.e2e\mail)를 지정하십시오. 화면 모드는 [메일 폴더] 칸, 자동 모드는 mail=<폴더>."
+        RunScenario = 1
+        Exit Function
+    End If
     Randomize
     mEmail = "vb6-" & LCase$(Hex$(Int(Rnd * 2147483647#))) & "@e2e.local"
     mPw = "Strong!Pass123"
@@ -164,10 +176,16 @@ Public Function RunScenario() As Long
         mKey = JsonGet(mBody, "sharedKey")
         Ok "2FA sharedKey/otpauth URI", Len(mKey) > 0 And Left$(JsonGet(mBody, "authenticatorUri"), 15) = "otpauth://totp/", mBody
     End If
+    ' 등록 QR 이미지(BMP)를 받아 VB6 LoadPicture로 열리는지 확인한다(화면의 QR 표시와 같은 경로).
+    qrFile = Environ$("TEMP") & "\totp-scenario-qr-" & Hex$(Int(Rnd * 2147483647#)) & ".bmp"
+    If Ok("2FA 등록 QR(BMP) 다운로드 → 200", HttpGetFile("/api/account/2fa/qr?format=bmp", mAccess, qrFile, mStatus), "상태 " & mStatus) Then
+        Ok "2FA 등록 QR(BMP) LoadPicture", CanLoadPicture(qrFile), "LoadPicture 실패"
+    End If
+    If Len(Dir$(qrFile)) > 0 Then Kill qrFile
     Api "POST", "/api/account/2fa/enable", JsonObj("code", WrongCode()), mAccess
     Expect "2FA enable 잘못된 코드 → 400", 400
     oldAt = mAccess: oldRt = mRefresh
-    Api "POST", "/api/account/2fa/enable", JsonObj("code", Totp(mKey)), mAccess
+    Api "POST", "/api/account/2fa/enable", JsonObj("code", SafeTotp(mKey)), mAccess
     If Expect("2FA enable (VB6 TOTP 계산) → 200", 200) Then
         For i = 0 To 9
             mCodes(i) = JsonArrayItem(mBody, "recoveryCodes", i)
@@ -182,9 +200,9 @@ Public Function RunScenario() As Long
     Ok "2FA 로그인 → challengeToken만 발급", Len(ch) > 0, MaskTokens(mBody)
     Api "POST", "/api/auth/2fa", JsonObj("challengeToken", ch, "code", WrongCode())
     Expect "2FA 잘못된 TOTP → 401", 401
-    Api "POST", "/api/auth/2fa", JsonObj("challengeToken", "forged.token.value", "code", Totp(mKey))
+    Api "POST", "/api/auth/2fa", JsonObj("challengeToken", "forged.token.value", "code", SafeTotp(mKey))
     Expect "2FA 위조 challengeToken → 401", 401
-    Api "POST", "/api/auth/2fa", JsonObj("challengeToken", ch, "code", Totp(mKey))
+    Api "POST", "/api/auth/2fa", JsonObj("challengeToken", ch, "code", SafeTotp(mKey))
     If Expect("2FA 정상 TOTP → 200", 200) Then mAccess = JsonGet(mBody, "accessToken"): mRefresh = JsonGet(mBody, "refreshToken")
     Api "GET", "/api/account/me", , Challenge()
     Expect "2FA challengeToken을 Access Token으로 사용 → 401 (REG-008)", 401
@@ -195,7 +213,7 @@ Public Function RunScenario() As Long
     Api "POST", "/api/account/2fa/recovery-codes/regenerate", JsonObj("code", WrongCode()), mAccess
     Expect "2FA 복구 코드 재발급 잘못된 코드 → 401", 401
     tok = mCodes(0)
-    Api "POST", "/api/account/2fa/recovery-codes/regenerate", JsonObj("code", Totp(mKey)), mAccess
+    Api "POST", "/api/account/2fa/recovery-codes/regenerate", JsonObj("code", SafeTotp(mKey)), mAccess
     If Expect("2FA 복구 코드 재발급 → 200", 200) Then
         For i = 0 To 9
             mCodes(i) = JsonArrayItem(mBody, "recoveryCodes", i)
@@ -226,9 +244,9 @@ Public Function RunScenario() As Long
 
     ' ---------- 2FA 초기화 / 비활성화 ----------
     If Login2Fa("2FA reset용 로그인") Then
-        Api "POST", "/api/account/2fa/reset", JsonObj("password", "Wrong!Pass999", "code", Totp(mKey)), mAccess
+        Api "POST", "/api/account/2fa/reset", JsonObj("password", "Wrong!Pass999", "code", SafeTotp(mKey)), mAccess
         Expect "2FA reset 잘못된 비밀번호 → 401", 401
-        Api "POST", "/api/account/2fa/reset", JsonObj("password", mPw, "code", Totp(mKey)), mAccess
+        Api "POST", "/api/account/2fa/reset", JsonObj("password", mPw, "code", SafeTotp(mKey)), mAccess
         Expect "2FA reset → 200", 200
         Api "POST", "/api/auth/token/refresh", JsonObj("refreshToken", mRefresh)
         Expect "2FA reset 후 기존 Refresh → 401 (REG-005)", 401
@@ -238,7 +256,7 @@ Public Function RunScenario() As Long
             If Login2Fa("2FA disable용 로그인") Then
                 Api "POST", "/api/account/2fa/disable", JsonObj("password", mPw, "code", WrongCode()), mAccess
                 Expect "2FA disable 잘못된 코드 → 401", 401
-                Api "POST", "/api/account/2fa/disable", JsonObj("password", mPw, "code", Totp(mKey)), mAccess
+                Api "POST", "/api/account/2fa/disable", JsonObj("password", mPw, "code", SafeTotp(mKey)), mAccess
                 Expect "2FA disable → 204", 204
                 Api "POST", "/api/auth/token/refresh", JsonObj("refreshToken", mRefresh)
                 Expect "2FA disable 후 기존 Refresh → 401 (REG-005)", 401
@@ -318,7 +336,7 @@ Public Function RunScenario() As Long
         If Expect("ADMIN 관리자 로그인 → 200", 200) Then
             ch = JsonGet(mBody, "challengeToken")
             Ok "ADMIN 관리자는 2FA 사용(challengeToken)", JsonGet(mBody, "requiresTwoFactor") = "true" And Len(ch) > 0, MaskTokens(mBody)
-            Api "POST", "/api/auth/2fa", JsonObj("challengeToken", ch, "code", Totp(gAdminKey), "deviceName", "VB6-Admin")
+            Api "POST", "/api/auth/2fa", JsonObj("challengeToken", ch, "code", SafeTotp(gAdminKey), "deviceName", "VB6-Admin")
             If Expect("ADMIN 관리자 TOTP 인증 → 200", 200) Then adminAt = JsonGet(mBody, "accessToken")
         End If
         If Len(adminAt) > 0 Then

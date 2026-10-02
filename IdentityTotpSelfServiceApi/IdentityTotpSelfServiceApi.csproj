@@ -16,5 +16,7 @@
     <PackageReference Include="Microsoft.OpenApi" Version="2.12.2" />
     <!-- SMTP 발송. System.Net.Mail.SmtpClient는 Microsoft가 신규 개발에 권장하지 않는다. -->
     <PackageReference Include="MailKit" Version="4.18.1" />
+    <!-- Authenticator 등록 QR 이미지(PNG/BMP/SVG). System.Drawing 없이 동작하는 렌더러만 쓴다(Linux CI 호환). -->
+    <PackageReference Include="QRCoder" Version="1.8.0" />
   </ItemGroup>
 </Project>

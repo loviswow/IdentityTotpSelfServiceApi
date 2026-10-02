@@ -39,6 +39,8 @@ Sub Main()
         End If
     Next
     If Right$(gBaseUrl, 1) = "/" Then gBaseUrl = Left$(gBaseUrl, Len(gBaseUrl) - 1)
+    ' mail=을 주지 않았으면 저장소의 .e2e\mail(run-e2e.ps1이 API에 설정하는 폴더)을 찾아 쓴다.
+    If Len(gMailDir) = 0 Then gMailDir = FindMailDir()
 
     Select Case mode
     Case "auto"
@@ -56,6 +58,31 @@ Sub Main()
         frmMain.Show
     End Select
 End Sub
+
+' 실행 파일은 tools\Vb6TestClient에 있으므로 두 단계 위가 저장소 루트다. 없으면 "".
+Public Function FindMailDir() As String
+    Dim p As String, i As Long
+    p = App.Path
+    For i = 1 To 2
+        If InStrRev(p, "\") > 3 Then p = Left$(p, InStrRev(p, "\") - 1)
+    Next
+    p = p & "\.e2e\mail"
+    If FolderExists(p) Then FindMailDir = p
+End Function
+
+' VB6 LoadPicture로 열 수 있는 그림 파일인지 확인한다(화면의 QR 표시와 같은 방식).
+Public Function CanLoadPicture(ByVal filePath As String) As Boolean
+    Dim p As StdPicture
+    On Error Resume Next
+    Set p = LoadPicture(filePath)
+    CanLoadPicture = (Err.Number = 0) And Not (p Is Nothing)
+End Function
+
+Public Function FolderExists(ByVal p As String) As Boolean
+    On Error Resume Next
+    If Len(p) = 0 Then Exit Function
+    FolderExists = (GetAttr(p) And vbDirectory) = vbDirectory
+End Function
 
 Public Sub LogLine(ByVal s As String)
     mLog = mLog & s & vbCrLf
