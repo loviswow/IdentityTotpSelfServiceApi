@@ -15,7 +15,14 @@ End Sub
 
 Sub Main()
     Dim a() As String, need As Boolean, ch As String, st As Long, s As String, oldRefresh As String, ok As Boolean, f As Integer
-    a = Split(Command$, " ")
+    a = Split(Trim$(Command$), " ")
+    ' 인자 5개가 모두 있어야 한다. 없이 실행하면 a(1) 등에서 런타임 오류 9(첨자 범위)가 나므로 사용법을 안내하고 끝낸다.
+    If UBound(a) < 4 Then
+        MsgBox "사용법: SampleCheck.exe <API주소> <이메일> <비밀번호> <TOTP키> <결과파일>" & vbCrLf & vbCrLf & _
+               "대상 사용자는 이메일 확인과 2FA 등록이 끝나 있어야 합니다." & vbCrLf & _
+               "보통은 scripts\run-e2e.ps1이 사용자를 준비해 자동으로 실행합니다.", vbInformation, "VB6Sample 모듈 검증"
+        ExitProcess 2
+    End If
     ApiInit a(0)
 
     ok = ApiLogin(a(1), "Wrong!Pass999", need, ch)

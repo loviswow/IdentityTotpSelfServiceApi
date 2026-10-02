@@ -77,4 +77,5 @@ node run-browser.mjs  --url  http://localhost:5090 --admin "admin@e2e.local:Admi
 ```
 SampleCheck.exe <API주소> <이메일> <비밀번호> <TOTP키> <결과파일>
 ```
+인자 없이 실행하면 사용법 창을 보여 주고 끝납니다(종료 코드 2). 대상 사용자는 이메일 확인과 2FA 등록이 끝나 있어야 하므로, 보통은 `run-e2e.ps1`로 실행합니다.
 대상 사용자는 2FA가 켜져 있어야 합니다.
