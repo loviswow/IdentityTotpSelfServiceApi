@@ -21,6 +21,25 @@
 
 모두 통과하면 종료 코드 0입니다. `-KeepRunning`을 주면 서버를 띄워 둔 채 끝나므로, 화면으로 직접 테스트할 수 있습니다.
 
+### 서버만 띄우기 (`-ServeOnly`)
+
+```powershell
+.\scripts\run-e2e.ps1 -ServeOnly
+```
+
+publish → DB 적용 → API(5080)·Web(5090) 실행까지만 하고 시나리오 없이 서버를 띄워 둡니다.
+- 메일 폴더(`.e2e\mail`)를 비우지 않습니다.
+- JWT 서명 키를 `.e2e\jwt-dev.key`에 저장해 재사용합니다. 서버를 다시 띄워도 기존 로그인 토큰이 유지됩니다(E2E 실행은 매번 새 키를 씁니다).
+- 포트가 이미 쓰이고 있으면 시작하지 않고 안내합니다. 끝낼 때는 다음 명령으로 종료합니다.
+  ```powershell
+  5080,5090 | % { Get-NetTCPConnection -LocalPort $_ -State Listen -ErrorAction SilentlyContinue } | % { Stop-Process -Id $_.OwningProcess -Force }
+  ```
+- 출력을 `| Tee-Object`, `| tail`처럼 파이프로 넘기지 마십시오. 띄운 서버가 파이프를 계속 잡고 있어 명령이 끝나지 않습니다(서버는 정상 실행됨).
+- Claude Code 대화창(`!`, Bash)에서는 `powershell.exe`가 PATH에 없으므로 전체 경로로 실행합니다. 이때도 한글은 UTF-8로 출력됩니다.
+  ```
+  ! /c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:/work/totp/IdentityTotpSelfServiceApi_v4/scripts/run-e2e.ps1 -ServeOnly
+  ```
+
 > **주의:** 운영 DB에는 사용하지 마십시오. 테스트 사용자와 감사 로그가 계속 쌓입니다.
 
 ## 직접 실행

@@ -11,10 +11,16 @@
   6. Web 시나리오(Node) / VB6 시나리오(/auto) 실행
   7. 감사 로그 점검 후 서버 종료
 
+  -ServeOnly: 1~4(publish, DB 적용, API·Web 서버 실행)만 하고 시나리오 없이 서버를 띄워 둔다.
+    메일 폴더를 비우지 않고, JWT 서명 키를 .e2e\jwt-dev.key에 저장해 재사용하므로 다시 띄워도 기존 로그인이 유지된다.
+    끝낼 때는 출력된 PID를 Stop-Process로 종료한다.
+
   운영 DB에는 절대 사용하지 않는다. 테스트 사용자/감사 로그가 계속 쌓인다.
 
 .EXAMPLE
   .\scripts\run-e2e.ps1 -SqlServer "localhost\SQLEXPRESS" -Database IdentityTotp_Test
+.EXAMPLE
+  .\scripts\run-e2e.ps1 -ServeOnly        # 서버만 띄우기 (API 5080, Web 5090)
 #>
 param(
     [string]$SqlServer = "localhost\SQLEXPRESS",
@@ -26,9 +32,13 @@ param(
     [string]$Chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe",
     [switch]$SkipWeb,
     [switch]$SkipVb6,
-    [switch]$KeepRunning
+    [switch]$KeepRunning,
+    [switch]$ServeOnly
 )
 $ErrorActionPreference = "Stop"
+# 출력이 파이프로 넘어가면(Git Bash, Claude Code의 ! 명령 등) 받는 쪽이 UTF-8로 읽으므로 UTF-8로 내보낸다.
+# 콘솔 창에 바로 출력할 때는 콘솔 코드 페이지(CP949)를 그대로 쓴다.
+if ([Console]::IsOutputRedirected) { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false }
 $root = Split-Path -Parent $PSScriptRoot
 $e2e = Join-Path $root ".e2e"
 $mail = Join-Path $e2e "mail"
@@ -67,8 +77,17 @@ function Sql([string]$query) {
 $procs = @()
 $exitCode = 1
 try {
+    # 이미 떠 있는 서버가 있으면 새 서버가 포트를 잡지 못하고, 시나리오가 예전 서버에 붙어 엉뚱한 결과가 나온다.
+    $ports = @($ApiPort) + $(if ($SkipWeb) { @() } else { @($WebPort) })
+    foreach ($p in $ports) {
+        if (Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue) {
+            throw "포트 $p 이(가) 이미 사용 중입니다. 기존 서버를 먼저 종료하십시오(예: Get-NetTCPConnection -LocalPort $p -State Listen | % { Stop-Process -Id `$_.OwningProcess })."
+        }
+    }
+
     New-Item -ItemType Directory -Force $e2e, $mail | Out-Null
-    Get-ChildItem $mail -Filter *.txt -ErrorAction SilentlyContinue | Remove-Item -Force
+    # 서버만 띄울 때는 화면에서 쓰던 확인·재설정 메일을 남겨 둔다.
+    if (-not $ServeOnly) { Get-ChildItem $mail -Filter *.txt -ErrorAction SilentlyContinue | Remove-Item -Force }
 
     Step "API publish"
     & $Dotnet publish (Join-Path $root "IdentityTotpSelfServiceApi\IdentityTotpSelfServiceApi.csproj") -c Release -o (Join-Path $e2e "api") --nologo -v q
@@ -90,8 +109,14 @@ try {
     $env:ConnectionStrings__DefaultConnection = $conn
     $env:Email__PickupDirectory = $mail
     $env:RateLimiting__AuthPermitLimit = "100000"   # 429는 xUnit(RateLimitTests)에서 검증한다.
-    $bytes = New-Object byte[] 48; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-    $env:Jwt__Key = [Convert]::ToBase64String($bytes)
+    # E2E는 실행마다 새 키를 쓴다. -ServeOnly는 키를 .e2e(저장소 제외)에 저장해 재사용하므로 서버를 다시 띄워도 로그인이 유지된다.
+    $keyFile = Join-Path $e2e "jwt-dev.key"
+    if ($ServeOnly -and (Test-Path $keyFile)) { $env:Jwt__Key = (Get-Content $keyFile -Raw).Trim() }
+    else {
+        $bytes = New-Object byte[] 48; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+        $env:Jwt__Key = [Convert]::ToBase64String($bytes)
+        if ($ServeOnly) { Set-Content -Path $keyFile -Value $env:Jwt__Key -Encoding ASCII }
+    }
     $procs += Start-Process $Dotnet -ArgumentList "IdentityTotpSelfServiceApi.dll" -WorkingDirectory (Join-Path $e2e "api") `
         -RedirectStandardOutput (Join-Path $e2e "api.log") -RedirectStandardError (Join-Path $e2e "api.err.log") -PassThru -WindowStyle Hidden
     $ready = $false
@@ -106,6 +131,15 @@ try {
         $procs += Start-Process node -ArgumentList "server.js" -WorkingDirectory $webDir `
             -RedirectStandardOutput (Join-Path $e2e "web.log") -RedirectStandardError (Join-Path $e2e "web.err.log") -PassThru -WindowStyle Hidden
         Start-Sleep -Seconds 1
+    }
+
+    if ($ServeOnly) {
+        Step "서버 실행 완료 (-ServeOnly: 시나리오 생략)"
+        Write-Host "  메일 폴더: $mail"
+        Write-Host "  VB6 테스트 화면: tools\Vb6TestClient\Vb6TestClient.exe (API 주소 http://localhost:$ApiPort)"
+        $KeepRunning = $true
+        $exitCode = 0
+        return   # finally에서 서버를 계속 실행한다고 안내하고 끝낸다.
     }
 
     Step "관리자 계정 준비"

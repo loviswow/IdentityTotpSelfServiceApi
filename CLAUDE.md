@@ -32,6 +32,7 @@ $env:TEST_SQLSERVER_CONNECTION="Server=localhost\SQLEXPRESS;Database=IdentityTot
 & $d test  IdentityTotpSelfServiceApi.sln --filter "FullyQualifiedName~RegressionTests.Refresh_SameTokenConcurrent_AtMostOneSucceeds"
 .\scripts\run-regression.ps1 [-ConnectionString "<sql conn>"]   # restore+build+test, TestResults\regression.trx 생성
 .\scripts\run-e2e.ps1                                           # 실제 서버 E2E (Web Node/Chrome + VB6). 종료 코드 0이면 통과
+.\scripts\run-e2e.ps1 -ServeOnly                                # 시나리오 없이 API(5080)·Web(5090)만 띄움. JWT 키 재사용(.e2e\jwt-dev.key)
 ```
 
 E2E 서버가 떠 있으면 `bin\Release` DLL이 잠겨 빌드가 실패하므로, E2E는 `.e2e\api`(publish 폴더)에서 실행한다.
@@ -91,7 +92,8 @@ DB 스키마는 `IdentityTotpSelfServiceApi/MigrationsSql/NNN_*.sql` 고정 SQL 
 - VB6 소스(`.bas`, `.frm`, `.vbp`)는 **CP949 + CRLF**다. Edit/Write 도구는 UTF-8로 쓰므로, 수정한 뒤 PowerShell로 CP949로 다시 저장하거나 처음부터 CP949로 읽고 써서 수정한다. 수정한 다음에는 `VB6.EXE /make`로 빌드되는지 확인한다.
   - 안전한 순서: CP949로 읽어 scratch에 UTF-8 작업본 저장 → 수정 → 줄바꿈을 CRLF로 맞추고 `GetEncoding(949, ExceptionFallback, ...)`로 저장(표현 불가 문자는 예외로 드러남) → `git diff --stat`으로 변경 줄 수가 의도와 같은지 확인.
   - Edit 도구는 작업본 줄바꿈을 LF로 바꿀 수 있다. `perl -CSD -i`는 이 파일을 이중 인코딩하므로 쓰지 않는다(바이트 모드 `perl -0pi`는 괜찮다).
-- `scripts/run-e2e.ps1`은 PowerShell 5.1용이라 **UTF-8 BOM**이 있어야 한글이 깨지지 않는다.
+- `scripts/run-e2e.ps1`은 PowerShell 5.1용이라 **UTF-8 BOM**이 있어야 한글이 깨지지 않는다. 출력이 파이프로 넘어가면(Git Bash 등) 스스로 UTF-8로 출력한다.
+- `-ServeOnly`/`-KeepRunning`으로 띄운 서버는 호출한 쪽의 출력 파이프를 물려받는다. 출력을 파이프(`| tail`, `*> $null`로 감싼 중첩 호출 등)로 받으면 서버가 살아 있는 동안 명령이 끝나지 않으므로, 파일로 리디렉션하거나 백그라운드로 실행한다.
 
 ## 작업 규칙 (이관 문서 및 REGRESSION_WORKFLOW.md 기준)
 
